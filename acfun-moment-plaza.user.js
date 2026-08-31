@@ -256,6 +256,23 @@
         .feed-interactive-banana[active] .icon_path {
             display: none !important;
         }
+        /* 加载中动画：· → ·· → ··· */
+        .plaza-count-loading {
+            color: transparent !important;
+            position: relative;
+        }
+        .plaza-count-loading::after {
+            content: '·';
+            position: absolute;
+            left: 0;
+            color: #999;
+            animation: plaza-dot-anim 1.5s infinite steps(1);
+        }
+        @keyframes plaza-dot-anim {
+            0% { content: '·'; }
+            33% { content: '··'; }
+            66% { content: '···'; }
+        }
 
         /* 原生分隔线样式 */
         .moment-plaza-item .feed-separate {
@@ -446,6 +463,22 @@
         }
         .feed-interactive-comment {
             cursor: pointer;
+        }
+        /* 首次设置框 */
+        .plaza-setup-box {
+            max-width: 500px;
+            margin: 80px auto;
+            padding: 30px;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 12px rgba(0,0,0,.08);
+            text-align: left;
+        }
+        #plaza-link-input:focus {
+            border-color: #fd4c5c;
+        }
+        #plaza-link-btn:hover {
+            background: #e8434f;
         }
         /* 内容链接样式 */
         .plaza-at-link, .plaza-topic-link, .plaza-ac-link {
@@ -1071,7 +1104,7 @@
             return `
                 <div class="moment-plaza-toolbar">
                     <span class="status" id="fetch-status">加载中...</span>
-                    <span class="status" id="up-status" style="color:#52c41a;font-size:12px;"></span>
+                    <span class="status" id="up-status" style="color:#52c41a;font-size:12px;cursor:pointer;" title="点击刷新"></span>
                 </div>
             `;
         },
@@ -1131,12 +1164,45 @@
             const isBanana = moment.isThrowBanana || false;
 
             let interactiveHtml = this.getInteractiveHtml();
-            interactiveHtml = interactiveHtml
-                .replace(/(<div\s+class="feed-interactive-comment"[^>]*>[\s\S]*?<\/span>)(\s*\d+)/, `$1${utils.formatNumber(commentCount)}`)
-                .replace(/(<div\s+class="feed-interactive-banana")([^>]*>)/, `$1${isBanana ? ' active=""' : ''}$2`)
-                .replace(/(<div\s+class="feed-interactive-banana"[^>]*>[\s\S]*<span[^>]*>)(\d+)(<\/span>[\s\S]*?<\/div>)/, `$1${utils.formatNumber(bananaCount)}$3`)
-                .replace(/(<div\s+class="feed-interactive-like")([^>]*>)/, `$1${isLiked ? ' active=""' : ''}$2`)
-                .replace(/(<div\s+class="feed-interactive-like"[^>]*>[\s\S]*?)(\d+)(\s*<\/div>)/, `$1${utils.formatNumber(likeCount)}$3`);
+
+            // 用DOM操作替代正则，更可靠
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = interactiveHtml;
+
+            // 评论数
+            const commentDiv = tempDiv.querySelector('.feed-interactive-comment');
+            if (commentDiv) {
+                const nodes = commentDiv.childNodes;
+                for (let i = nodes.length - 1; i >= 0; i--) {
+                    if (nodes[i].nodeType === 3 && nodes[i].textContent.trim()) {
+                        nodes[i].textContent = utils.formatNumber(commentCount) + '\n    ';
+                        break;
+                    }
+                }
+            }
+
+            // 香蕉数
+            const bananaDiv = tempDiv.querySelector('.feed-interactive-banana');
+            if (bananaDiv) {
+                if (isBanana) bananaDiv.setAttribute('active', '');
+                const span = bananaDiv.querySelector('span:last-of-type');
+                if (span) span.textContent = utils.formatNumber(bananaCount);
+            }
+
+            // 点赞数
+            const likeDiv = tempDiv.querySelector('.feed-interactive-like');
+            if (likeDiv) {
+                if (isLiked) likeDiv.setAttribute('active', '');
+                const nodes = likeDiv.childNodes;
+                for (let i = nodes.length - 1; i >= 0; i--) {
+                    if (nodes[i].nodeType === 3 && nodes[i].textContent.trim()) {
+                        nodes[i].textContent = utils.formatNumber(likeCount) + '\n    ';
+                        break;
+                    }
+                }
+            }
+
+            interactiveHtml = tempDiv.innerHTML;
 
             // 完全复用原生HTML结构
             return `
@@ -1298,37 +1364,13 @@
             }
         },
 
-        // 后台静默工作：有am号就开始持续向上查找
+        // 启动：有am号就开始向上查找
         startBackgroundWork() {
             const knownAmId = utils.getLastAmId();
-
-            if (!knownAmId || knownAmId <= 0) {
-                this.showFirstUseTip();
-                return;
-            }
+            if (!knownAmId || knownAmId <= 0) return;
 
             state.latestAmId = knownAmId;
-            // 全页面启动向上持续查找（完全无感）
             this._startUpwardLoop();
-        },
-
-        // 首次使用提示
-        showFirstUseTip() {
-            const tip = document.createElement('div');
-            tip.style.cssText = `
-                position: fixed; top: 60px; right: 20px; z-index: 10000;
-                background: #fff3cd; border: 1px solid #ffc107; color: #856404;
-                padding: 12px 20px; border-radius: 6px; font-size: 14px;
-                box-shadow: 0 2px 8px rgba(0,0,0,.15); cursor: pointer;
-                transition: opacity 0.3s;
-            `;
-            tip.textContent = '📌 动态广场：请先进入「关注动态」页面获取am号';
-            tip.addEventListener('click', () => {
-                window.location.href = '/member/feeds';
-            });
-            document.body.appendChild(tip);
-            setTimeout(() => { tip.style.opacity = '0'; }, 8000);
-            setTimeout(() => { tip.remove(); }, 8500);
         },
 
         // ========== 向上查找（找20条新的就停，到顶了提示不足） ==========
@@ -1520,13 +1562,14 @@
             });
         },
 
-        // 进入/刷新动态广场（始终获取最新数据）
+        // 进入/刷新动态广场
         enterPlaza() {
             const mainContent = document.querySelector('.ac-member-main .ac-member-feeds');
 
-            // 非 feeds 页面：提示用户先去关注动态页
+            // 非 feeds 页面：跳转并标记自动进入
             if (!mainContent) {
-                alert('请先进入「关注动态」页面');
+                GM_setValue('moment_plaza_auto_enter', true);
+                window.location.href = '/member/feeds';
                 return;
             }
 
@@ -1553,11 +1596,7 @@
             const updateStatus = (t) => { if (statusEl) statusEl.textContent = t; };
             updateStatus('正在刷新...');
 
-            // 从实时DOM提取最新am号
-            const mainContent = document.querySelector('.ac-member-main .ac-member-feeds');
-            if (mainContent) this.extractLatestAmIdFromDOM(mainContent);
-
-            // 放出向上查找到的最新am号（取最大值）
+            // 取向上查找到的最新am号
             if (state._upLatestAm > state.latestAmId) {
                 state.latestAmId = state._upLatestAm;
             }
@@ -1592,25 +1631,38 @@
             const mainContent = document.querySelector('.ac-member-main .ac-member-feeds');
             if (!mainContent) return;
 
-            // 从DOM提取（但不覆盖已有的更大值）
-            const prevAmId = state.latestAmId;
-            this.extractLatestAmIdFromDOM(mainContent);
-            if (prevAmId > state.latestAmId) {
-                state.latestAmId = prevAmId;
-            }
-            // 取_upLatestAm（向上查找找到的）
-            if (state._upLatestAm > state.latestAmId) {
-                state.latestAmId = state._upLatestAm;
-            }
-            utils.setLastAmId(state.latestAmId);
-
             renderer.getInteractiveHtml();
 
             if (!this._originalContent) {
                 this._originalContent = mainContent.innerHTML;
             }
 
-            // 先展示空壳
+            // 取_upLatestAm（向上查找找到的）
+            if (state._upLatestAm > state.latestAmId) {
+                state.latestAmId = state._upLatestAm;
+                utils.setLastAmId(state.latestAmId);
+            }
+
+            // 没有am号 → 显示链接输入框
+            if (!state.latestAmId || state.latestAmId <= 0) {
+                mainContent.innerHTML = `
+                    <div class="moment-plaza-container">
+                        <div class="plaza-setup-box">
+                            <h3 style="margin:0 0 12px;color:#333;">📌 首次使用</h3>
+                            <p style="color:#666;font-size:14px;margin-bottom:12px;">请粘贴一条动态链接来获取 am 号：</p>
+                            <p style="color:#999;font-size:12px;margin-bottom:16px;">示例：https://www.acfun.cn/moment/am5073277</p>
+                            <div style="display:flex;gap:8px;">
+                                <input id="plaza-link-input" type="text" placeholder="粘贴动态链接..." style="flex:1;height:36px;padding:0 10px;border:1px solid #e5e5e5;border-radius:4px;font-size:14px;outline:none;" />
+                                <button id="plaza-link-btn" style="height:36px;padding:0 20px;background:#fd4c5c;color:#fff;border:none;border-radius:4px;font-size:14px;cursor:pointer;">确定</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                this._bindSetupEvents(mainContent);
+                return;
+            }
+
+            // 有am号 → 正常展示
             state.moments = [];
             mainContent.innerHTML = `
                 <div class="moment-plaza-container">
@@ -1620,7 +1672,6 @@
                 </div>
             `;
 
-            // 添加回到顶部按钮
             if (!document.querySelector('.plaza-back-top')) {
                 const backTop = document.createElement('div');
                 backTop.className = 'plaza-back-top';
@@ -1632,21 +1683,13 @@
             this.bindEvents();
             this._setupScrollListener();
 
-            // 实时抓取最新20条
             const statusEl = document.getElementById('fetch-status');
-
-            if (!state.latestAmId || state.latestAmId <= 0) {
-                if (statusEl) statusEl.textContent = '暂无am号，请先进入「关注动态」页面';
-                return;
-            }
-
             if (statusEl) statusEl.textContent = '正在加载...';
 
             const moments = await this._fetchMomentsDown(state.latestAmId);
             state.moments = moments;
             if (moments.length > 0) {
                 state.oldestAmId = Math.min(...moments.map(m => m._amId || Infinity));
-                // 更新最新am号
                 const maxAm = Math.max(...moments.map(m => m._amId || 0));
                 if (maxAm > state.latestAmId) {
                     state.latestAmId = maxAm;
@@ -1657,7 +1700,33 @@
             if (statusEl) statusEl.textContent = `共 ${state.moments.length} 条动态，向下滚动加载更多`;
         },
 
-        // 设置滚动懒加载
+        // 首次使用：绑定链接输入事件
+        _bindSetupEvents(mainContent) {
+            const input = document.getElementById('plaza-link-input');
+            const btn = document.getElementById('plaza-link-btn');
+            if (!input || !btn) return;
+
+            const parseAndStart = () => {
+                const value = input.value.trim();
+                // 从链接解析am号：https://www.acfun.cn/moment/am5073277
+                const match = value.match(/am(\d+)/);
+                if (!match) {
+                    alert('无法解析链接，请确认格式正确\n示例：https://www.acfun.cn/moment/am5073277');
+                    return;
+                }
+                const amId = parseInt(match[1]);
+                state.latestAmId = amId;
+                utils.setLastAmId(amId);
+                // 重新加载广场
+                this.showPlazaView();
+            };
+
+            btn.addEventListener('click', parseAndStart);
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') parseAndStart();
+            });
+        },
+
         _setupScrollListener() {
             // 清理旧监听
             if (state._scrollHandler) {
@@ -1765,42 +1834,6 @@
             if (listEl) listEl.innerHTML = renderer.renderList(state.moments);
         },
 
-        // 从实时DOM提取最新am号
-        extractLatestAmIdFromDOM(container) {
-            if (!container) {
-                state.latestAmId = utils.getLastAmId();
-                return;
-            }
-
-            const feedCards = container.querySelectorAll('.ac-member-feed');
-            let maxMomentId = 0;
-
-            for (const card of feedCards) {
-                const logItem = card.getAttribute('log-item');
-                if (logItem) {
-                    try {
-                        const data = JSON.parse(logItem);
-                        // 只提取moment类型的动态ID
-                        if (data.cont_type === 'moment' && data.content_id) {
-                            const amId = parseInt(data.content_id);
-                            if (amId > maxMomentId) {
-                                maxMomentId = amId;
-                            }
-                        }
-                    } catch (e) {}
-                }
-            }
-
-            if (maxMomentId > 0) {
-                state.latestAmId = maxMomentId;
-                utils.setLastAmId(maxMomentId);
-                utils.log('从实时DOM提取到最新am号:', maxMomentId);
-            } else {
-                state.latestAmId = utils.getLastAmId();
-                utils.log('DOM无moment数据，使用缓存am号:', state.latestAmId);
-            }
-        },
-
         showOriginalView() {
             const mainContent = document.querySelector('.ac-member-main .ac-member-feeds');
             if (mainContent && this._originalContent) {
@@ -1833,6 +1866,12 @@
             };
 
             document.addEventListener('click', async (e) => {
+                // 点击状态栏刷新
+                if (e.target.closest('#up-status') || e.target.closest('#fetch-status')) {
+                    this.refreshPlaza();
+                    return;
+                }
+
                 // 分享（复制链接）
                 const shareBtn = e.target.closest('.feed-interactive-repost');
                 if (shareBtn) {
@@ -2081,6 +2120,19 @@
         },
 
         setupFeedsPage() {
+            // 从其他页面跳转过来，自动进入广场
+            if (GM_getValue('moment_plaza_auto_enter', false)) {
+                GM_setValue('moment_plaza_auto_enter', false);
+                const waitForContent = setInterval(() => {
+                    const mainContent = document.querySelector('.ac-member-main .ac-member-feeds');
+                    if (mainContent) {
+                        clearInterval(waitForContent);
+                        this.enterPlaza();
+                    }
+                }, 300);
+                return;
+            }
+
             setTimeout(() => {
                 this.addPlazaPromotion();
             }, 1000);
