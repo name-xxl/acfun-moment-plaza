@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AcFun 动态广场
 // @namespace    https://www.acfun.cn/
-// @version      2.0.0
-// @description  按am号查找动态，按时间排序显示
+// @version      3.0.0
+// @description  按am号查找动态，按时间排序显示，IndexedDB 预加载缓存
 // @author       name_xxl
 // @match        https://www.acfun.cn/member*
 // @match        https://www.acfun.cn/moment/*
@@ -19,35 +19,38 @@
 (function() {
     'use strict';
 
-    // 配置
+    // ===================== 配置 =====================
     const CONFIG = {
         MOMENT_API: 'https://www.acfun.cn/rest/pc-direct/moment/detail',
-        CONCURRENT: 10,       // 并发请求数
-        MAX_EMPTY: 30,        // 连续空号上限
-        BATCH_SIZE: 20,       // 每批加载数量
-        // 密集搜索（不跳跃，逐个检查）
-        JUMP_THRESHOLD: 999,  // 不触发跳跃
-        JUMP_STEP_SMALL: 1,
-        JUMP_STEP_LARGE: 1,
+        CONCURRENT: 10,        // 并发请求数
+        MAX_EMPTY: 30,         // 连续空号上限
+        BATCH_SIZE: 20,        // 向上/向下每次加载的固定条数
+
+        FRESH_WINDOW_MS: 3 * 3600 * 1000,   // 发布 ≤3 小时 → 互动数字用加载动画 + 后台注入
+        UP_STOP_AT_MS: 1 * 3600 * 1000,     // 向上爬到「发布 ≤1 小时」的动态即停
+        DOWN_STOP_AFTER_MS: 24 * 3600 * 1000, // 向下爬到「发布 >24 小时」的动态即停
+
+        UP_POLL_INTERVAL: 60 * 1000,        // 向上后台定时检查间隔
+        UP_POLL_GAP_MS: 1 * 3600 * 1000,    // 数据库最新动态距今 >1 小时才启动向上爬
+
+        KEEP_DAYS_DEFAULT: 3,               // 数据库默认保留天数（1-7 可调）
     };
 
-    // 状态
+    // ===================== 状态 =====================
     const state = {
-        moments: [],          // 当前显示的动态（临时，不持久化）
-        latestAmId: 0,        // 已知最新am号（唯一持久化数据）
-        oldestAmId: 0,        // 当前显示的最旧am号
-        // 向下滚动
+        moments: [],          // 当前展示的记录 [{ amId, absTs, data, fetchedAt }]
+        latestAmId: 0,        // 已知最大 am 号（向上探测边界，持久化）
+        oldestAmId: 0,        // 当前展示最旧 am 号
         _scrollHandler: null,
         _downLoading: false,
         _noMoreDown: false,
-        // 向上持续查找
-        _upRunning: false,
-        _upAtCeiling: false,
-        _upTimer: null,
-        _upLatestAm: 0,       // 向上查找到的最新am号（待发布）
+        _upRunning: false,    // 正在向上爬取
+        _upPollTimer: null,   // 向上定时器
+        _originalContent: null,
     };
 
     const LAST_AM_KEY = 'moment_plaza_last_am';
+    const KEEP_DAYS_KEY = 'moment_plaza_keep_days';
 
     // 注入样式 - 完全复用A站原生样式
     const styles = `
@@ -308,9 +311,6 @@
         }
         .moment-comments .area-comment-left {
             flex-shrink: 0;
-        }
-        .moment-comments .area-comment-left .thumb {
-            display: block;
         }
         .moment-comments .area-comment-left .thumb {
             display: block;
@@ -629,12 +629,13 @@
 
     GM_addStyle(styles);
 
-    // 工具函数
+    // ===================== 工具函数 =====================
     const utils = {
         log(...args) {
             console.log('%c[MomentPlaza]', 'color:#ff4b76;font-weight:bold', ...args);
         },
 
+        // 绝对时间戳 → 相对时间 / 日期
         formatTime(timestamp) {
             if (!timestamp) return '';
             const now = Date.now();
@@ -650,6 +651,28 @@
 
             const date = new Date(timestamp);
             return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        },
+
+        // 相对时间字符串 → 毫秒偏移（"40分钟前" → 40*60000）
+        parseRelativeMs(text) {
+            if (!text) return 0;
+            const m = String(text).match(/(\d+)\s*(秒|分钟|小时|天)/);
+            if (!m) return 0;
+            const n = parseInt(m[1]);
+            switch (m[2]) {
+                case '秒': return n * 1000;
+                case '分钟': return n * 60000;
+                case '小时': return n * 3600000;
+                case '天': return n * 86400000;
+                default: return 0;
+            }
+        },
+
+        // 由相对时间反推绝对时间戳（API 不返回绝对时间）
+        computeAbsTs(createTime, fetchedAt) {
+            const offset = this.parseRelativeMs(createTime);
+            if (!offset) return fetchedAt || Date.now();
+            return (fetchedAt || Date.now()) - offset;
         },
 
         formatNumber(num) {
@@ -669,56 +692,187 @@
         parseContent(text) {
             if (!text) return '';
             let html = utils.escapeHtml(text);
-            // 1. @提及: [at uid=xxx]@name[/at] → 用户主页
             html = html.replace(/\[at uid=(\d+)\]@?(.*?)\[\/at\]/g, (_, uid, name) => {
                 return `<a class="plaza-at-link" href="//www.acfun.cn/u/${uid}" target="_blank">@${utils.escapeHtml(name)}</a>`;
             });
-            // 2. #话题# → 搜索
             html = html.replace(/#([^#\s]{1,30}?)#/g, (_, topic) => {
                 return `<a class="plaza-topic-link" href="//www.acfun.cn/search?keyword=${encodeURIComponent(topic)}" target="_blank">#${topic}#</a>`;
             });
-            // 3. ac号（视频/文章通用，A站自动跳转）
             html = html.replace(/\b(ac\d{4,})\b/gi, (_, id) => {
                 return `<a class="plaza-ac-link" href="//www.acfun.cn/a/${id}" target="_blank">${id}</a>`;
             });
-            // 4. v/ac号 / a/ac号
             html = html.replace(/\b([va])\/(ac\d{4,})\b/gi, (_, prefix, id) => {
                 return `<a class="plaza-ac-link" href="//www.acfun.cn/${prefix}/${id}" target="_blank">${prefix}/${id}</a>`;
             });
-            // 5. 手机动态链接 → web端链接
             html = html.replace(/m\.acfun\.cn\/communityCircle\/moment\/(\d+)/g, (_, id) => {
                 return `<a class="plaza-ac-link" href="//www.acfun.cn/moment/am${id}" target="_blank">am${id}</a>`;
             });
-            // 5. 表情 → [表情]占位
             html = html.replace(/\[emot=(\w+),(\d+)\/?\]/g, '<span style="color:#999;font-size:12px;">[表情]</span>');
             html = html.replace(/\[表情\]/g, '<span style="color:#999;font-size:12px;">[表情]</span>');
             return html;
         },
 
-
-        // 获取上次am号（首次使用返回0）
         getLastAmId() {
-            try {
-                return GM_getValue(LAST_AM_KEY, 0);
-            } catch {
-                return 0;
-            }
+            try { return GM_getValue(LAST_AM_KEY, 0); } catch { return 0; }
         },
 
-        // 保存上次am号
         setLastAmId(amId) {
+            try { GM_setValue(LAST_AM_KEY, amId); } catch (e) {}
+        },
+
+        getKeepDays() {
             try {
-                GM_setValue(LAST_AM_KEY, amId);
-            } catch (e) {}
+                const d = GM_getValue(KEEP_DAYS_KEY, CONFIG.KEEP_DAYS_DEFAULT);
+                return Math.min(7, Math.max(1, parseInt(d) || CONFIG.KEEP_DAYS_DEFAULT));
+            } catch { return CONFIG.KEEP_DAYS_DEFAULT; }
+        },
+
+        setKeepDays(days) {
+            try { GM_setValue(KEEP_DAYS_KEY, Math.min(7, Math.max(1, days || CONFIG.KEEP_DAYS_DEFAULT))); } catch (e) {}
         }
     };
 
-    // API请求
+    // ===================== IndexedDB 存储层 =====================
+    const DB_NAME = 'moment-plaza';
+    const DB_VERSION = 1;
+    const STORE_MOMENTS = 'moments';
+    const STORE_META = 'meta';
+
+    let _dbPromise = null;
+
+    const db = {
+        open() {
+            if (_dbPromise) return _dbPromise;
+            _dbPromise = new Promise((resolve, reject) => {
+                const req = indexedDB.open(DB_NAME, DB_VERSION);
+                req.onupgradeneeded = (e) => {
+                    const d = e.target.result;
+                    if (!d.objectStoreNames.contains(STORE_MOMENTS)) {
+                        const store = d.createObjectStore(STORE_MOMENTS, { keyPath: 'amId' });
+                        store.createIndex('by_absTs', 'absTs');
+                    }
+                    if (!d.objectStoreNames.contains(STORE_META)) {
+                        d.createObjectStore(STORE_META);
+                    }
+                };
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+            return _dbPromise;
+        },
+
+        async putMoment(record) {
+            const d = await this.open();
+            return new Promise((resolve, reject) => {
+                const tx = d.transaction(STORE_MOMENTS, 'readwrite');
+                tx.objectStore(STORE_MOMENTS).put(record);
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        },
+
+        async putMoments(records) {
+            if (!records || !records.length) return;
+            const d = await this.open();
+            return new Promise((resolve, reject) => {
+                const tx = d.transaction(STORE_MOMENTS, 'readwrite');
+                const store = tx.objectStore(STORE_MOMENTS);
+                records.forEach(r => store.put(r));
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        },
+
+        async getMoment(amId) {
+            const d = await this.open();
+            return new Promise((resolve, reject) => {
+                const req = d.transaction(STORE_MOMENTS, 'readonly').objectStore(STORE_MOMENTS).get(amId);
+                req.onsuccess = () => resolve(req.result || null);
+                req.onerror = () => reject(req.error);
+            });
+        },
+
+        // 取 amId < fromId 的 count 条（按 amId 降序，即较新的在前）
+        async getOlderThan(fromId, count) {
+            const d = await this.open();
+            return new Promise((resolve, reject) => {
+                const store = d.transaction(STORE_MOMENTS, 'readonly').objectStore(STORE_MOMENTS);
+                const range = IDBKeyRange.upperBound(fromId, true);
+                const result = [];
+                const req = store.openCursor(range, 'prev');
+                req.onsuccess = (e) => {
+                    const cursor = e.target.result;
+                    if (cursor && result.length < count) {
+                        result.push(cursor.value);
+                        cursor.continue();
+                    } else {
+                        resolve(result);
+                    }
+                };
+                req.onerror = () => reject(req.error);
+            });
+        },
+
+        // 取最新（amId 最大）的 count 条
+        async getLatest(count) {
+            const d = await this.open();
+            return new Promise((resolve, reject) => {
+                const store = d.transaction(STORE_MOMENTS, 'readonly').objectStore(STORE_MOMENTS);
+                const result = [];
+                const req = store.openCursor(null, 'prev');
+                req.onsuccess = (e) => {
+                    const cursor = e.target.result;
+                    if (cursor && result.length < count) {
+                        result.push(cursor.value);
+                        cursor.continue();
+                    } else {
+                        resolve(result);
+                    }
+                };
+                req.onerror = () => reject(req.error);
+            });
+        },
+
+        // 取所有记录里最大的 absTs（用于向上爬取判断落后程度）
+        async getLatestAbsTs() {
+            const d = await this.open();
+            return new Promise((resolve, reject) => {
+                const store = d.transaction(STORE_MOMENTS, 'readonly').objectStore(STORE_MOMENTS);
+                const index = store.index('by_absTs');
+                const req = index.openCursor(null, 'prev');
+                req.onsuccess = (e) => {
+                    const cursor = e.target.result;
+                    if (cursor) resolve(cursor.value.absTs || 0);
+                    else resolve(0);
+                };
+                req.onerror = () => reject(req.error);
+            });
+        },
+
+        // 删除 absTs < cutoffTs 的过期记录
+        async deleteOlderThan(cutoffTs) {
+            const d = await this.open();
+            return new Promise((resolve, reject) => {
+                const store = d.transaction(STORE_MOMENTS, 'readwrite').objectStore(STORE_MOMENTS);
+                const index = store.index('by_absTs');
+                const range = IDBKeyRange.upperBound(cutoffTs);
+                const req = index.openCursor(range);
+                req.onsuccess = (e) => {
+                    const cursor = e.target.result;
+                    if (cursor) { cursor.delete(); cursor.continue(); }
+                    else resolve();
+                };
+                req.onerror = () => reject(req.error);
+            });
+        }
+    };
+
+    // ===================== API 请求 =====================
     const api = {
         // 根据am号获取单条动态
-        async fetchMoment(amId) {
-            if (!amId || amId <= 0) return null;
-            return new Promise((resolve, reject) => {
+        fetchMoment(amId) {
+            if (!amId || amId <= 0) return Promise.resolve(null);
+            return new Promise((resolve) => {
                 GM_xmlhttpRequest({
                     method: 'GET',
                     url: `${CONFIG.MOMENT_API}?momentId=${amId}`,
@@ -727,23 +881,15 @@
                         'Referer': `https://www.acfun.cn/moment/am${amId}`,
                     },
                     onload: (response) => {
-                        // 检查是否是JSON
                         const text = response.responseText.trim();
                         if (!text.startsWith('{') && !text.startsWith('[')) {
                             resolve(null);
                             return;
                         }
-
                         try {
                             const data = JSON.parse(text);
-                            if (data.result === 0) {
-                                resolve(data);
-                            } else {
-                                resolve(null);
-                            }
-                        } catch (e) {
-                            resolve(null);
-                        }
+                            resolve(data.result === 0 ? data : null);
+                        } catch (e) { resolve(null); }
                     },
                     onerror: () => resolve(null)
                 });
@@ -751,7 +897,7 @@
         },
 
         // 获取评论列表
-        async fetchComments(amId, count = 10, cursor = '') {
+        fetchComments(amId, count = 10, cursor = '') {
             return new Promise((resolve) => {
                 GM_xmlhttpRequest({
                     method: 'GET',
@@ -786,9 +932,6 @@
                             if (data.result === 0) {
                                 this._apiToken = data['acfun.midground.api_st'] || '';
                                 this._tokenExpiry = Date.now() + 30 * 60 * 1000;
-                                utils.log('token获取成功');
-                            } else {
-                                utils.log('token获取失败:', data.error_msg);
                             }
                         } catch {}
                         resolve(this._apiToken);
@@ -801,10 +944,7 @@
         // 点赞/取消点赞动态
         async likeMoment(momentId, userId, isCancel = false) {
             const token = await this.getApiToken();
-            if (!token) {
-                utils.log('点赞失败: 无法获取token');
-                return null;
-            }
+            if (!token) return null;
             const endpoint = isCancel ? 'delete' : 'add';
             return new Promise((resolve) => {
                 GM_xmlhttpRequest({
@@ -813,13 +953,9 @@
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
                     data: `objectId=${momentId}&objectType=10&userId=${userId}&acfun.midground.api_st=${encodeURIComponent(token)}&kpn=ACFUN_APP&kpf=PC_WEB&subBiz=mainApp&interactType=1`,
                     onload: (resp) => {
-                        try {
-                            const result = JSON.parse(resp.responseText);
-                            utils.log(isCancel ? '取消点赞' : '点赞', '结果:', result);
-                            resolve(result);
-                        } catch { resolve(null); }
+                        try { resolve(JSON.parse(resp.responseText)); } catch { resolve(null); }
                     },
-                    onerror: (e) => { utils.log('点赞请求失败:', e); resolve(null); }
+                    onerror: () => resolve(null)
                 });
             });
         },
@@ -839,7 +975,7 @@
         },
 
         // 投蕉给动态作者
-        async throwBanana(momentId, toUserId) {
+        throwBanana(momentId) {
             return new Promise((resolve) => {
                 GM_xmlhttpRequest({
                     method: 'POST',
@@ -854,241 +990,119 @@
             });
         },
 
-        // 向上查找新动态 - 智能跳跃查找
-        async fetchNewMoments(startId, maxCount = 50) {
+        // 向上查找新动态（并发逐个探测）
+        // opts: { skipFansOnly, stopAtMs }  stopAtMs: 遇到发布时间距今 ≤stopAtMs 的动态即停
+        async fetchNewMoments(startId, targetCount = 50, opts = {}) {
             const results = [];
             let currentId = startId + 1;
             let emptyCount = 0;
-            let foundCount = 0;           // 连续找到计数
             let totalChecked = 0;
-            let currentStep = 1;          // 当前步长
-            let jumpBackId = 0;           // 跳跃回退点
+            const MAX_SCAN = targetCount * 50;
 
-            utils.log(`智能查找: 从 am${currentId} 开始，最多 ${maxCount} 个`);
-
-            // 探测函数：批量检查一批am号
-            const probeBatch = async (start, count) => {
-                const batch = [];
-                for (let i = 0; i < count; i++) {
-                    batch.push(start + i);
+            while (results.length < targetCount && totalChecked < MAX_SCAN && currentId <= startId + MAX_SCAN) {
+                const room = targetCount - results.length;
+                const batchIds = [];
+                for (let i = 0; i < Math.min(CONFIG.CONCURRENT, room); i++) {
+                    batchIds.push(currentId + i);
                 }
+                totalChecked += batchIds.length;
 
-                const promises = batch.map(amId =>
+                const batchResults = await Promise.all(batchIds.map(amId =>
                     this.fetchMoment(amId).then(data => {
-                        totalChecked++;
-                        // API返回 { result: 0, moment: { momentId, ... } }
                         if (data && data.result === 0 && data.moment) {
-                            results.push({ ...data, _amId: amId });
-                            return { amId, found: true };
+                            const moment = data.moment;
+                            if (opts.skipFansOnly && moment.visibleForFans) {
+                                return { amId, fansOnly: true };
+                            }
+                            const ageMs = utils.parseRelativeMs(moment.createTime);
+                            return { amId, found: true, moment: data, hitFresh: opts.stopAtMs != null && ageMs <= opts.stopAtMs };
                         }
                         return { amId, found: false };
                     })
-                );
+                ));
 
-                return Promise.all(promises);
-            };
-
-            while (totalChecked < maxCount) {
-                // 根据当前步长决定探测策略
-                if (currentStep === 1) {
-                    // 密集查找：逐个检查
-                    const batchResults = await probeBatch(currentId, Math.min(CONFIG.CONCURRENT, maxCount - totalChecked));
-
-                    let batchFound = 0;
-                    for (const r of batchResults) {
-                        if (r.found) {
-                            batchFound++;
-                            emptyCount = 0;
-                        } else {
-                            emptyCount++;
-                        }
-                    }
-
-                    foundCount += batchFound;
-                    currentId += batchResults.length;
-
-                    // 连续找到足够多，开始跳跃
-                    if (foundCount >= CONFIG.JUMP_THRESHOLD) {
-                        jumpBackId = currentId;  // 记录回退点
-                        currentStep = CONFIG.JUMP_STEP_SMALL;
-                        foundCount = 0;
-                        utils.log(`连续找到数据，跳跃步长: ${currentStep}`);
-                    }
-
-                } else {
-                    // 跳跃查找：只检查一个点
-                    const batchResults = await probeBatch(currentId, 1);
-                    const found = batchResults[0]?.found;
-
-                    if (found) {
-                        // 跳跃点有数据，继续加大跳跃
-                        foundCount++;
+                let hitFresh = false;
+                for (const r of batchResults) {
+                    if (r.fansOnly) continue;
+                    if (r.found) {
                         emptyCount = 0;
-
-                        if (currentStep < CONFIG.JUMP_STEP_LARGE) {
-                            currentStep = Math.min(currentStep * 3, CONFIG.JUMP_STEP_LARGE);
-                            utils.log(`跳跃点有数据，步长增加到: ${currentStep}`);
-                        }
-
-                        currentId += currentStep;
+                        results.push({ ...r.moment, _amId: r.amId });
+                        if (r.hitFresh) hitFresh = true;
                     } else {
-                        // 跳跃点无数据，回退到上一个位置，密集查找
-                        utils.log(`跳跃点无数据，回退到 am${jumpBackId} 密集查找`);
-                        currentId = jumpBackId;
-                        currentStep = 1;
-                        foundCount = 0;
                         emptyCount++;
                     }
                 }
+                currentId += batchIds.length;
 
-                // 停止条件
-                if (emptyCount >= CONFIG.MAX_EMPTY) {
-                    utils.log(`连续 ${emptyCount} 个空号，停止`);
-                    break;
-                }
-
-                if (currentId > startId + 10000) {
-                    utils.log('超出范围限制');
-                    break;
-                }
+                if (hitFresh) { utils.log('向上爬到最新（≤1h），停止'); break; }
+                if (emptyCount >= CONFIG.MAX_EMPTY) { utils.log(`连续 ${emptyCount} 个空号，停止`); break; }
+                await new Promise(r => setTimeout(r, 60));
             }
 
-            utils.log(`查找完成: 检查 ${totalChecked} 个，找到 ${results.length} 条`);
-
-            // 去重 + 按am号排序（大的在前）
-            const seen = new Set();
-            const unique = results.filter(m => {
-                const id = m._amId || m.momentId;
-                if (seen.has(id)) return false;
-                seen.add(id);
-                return true;
-            });
-            unique.sort((a, b) => (b._amId || b.momentId) - (a._amId || a.momentId));
-
-            return unique;
+            results.sort((a, b) => b._amId - a._amId);
+            return results;
         },
 
-        // 向下查找历史动态 - 智能跳跃查找
-        async fetchOldMoments(startId, maxCount = 50) {
+        // 向下查找历史动态（并发逐个探测）
+        // opts: { skipFansOnly, stopAfterMs }  stopAfterMs: 遇到发布时间距今 >stopAfterMs 的动态即停（太旧）
+        async fetchOldMoments(startId, targetCount = 20, opts = {}) {
             const results = [];
             let currentId = startId - 1;
             let emptyCount = 0;
-            let foundCount = 0;
             let totalChecked = 0;
-            let currentStep = 1;
-            let jumpBackId = 0;
+            const MAX_SCAN = targetCount * 50;
 
-            utils.log(`智能查找: 从 am${currentId} 向下，最多 ${maxCount} 个`);
-
-            // 探测函数
-            const probeBatch = async (start, count) => {
-                const batch = [];
-                for (let i = 0; i < count; i++) {
-                    const amId = start - i;
-                    if (amId > 0) batch.push(amId);
+            while (results.length < targetCount && totalChecked < MAX_SCAN && currentId > 0) {
+                const room = targetCount - results.length;
+                const batchIds = [];
+                for (let i = 0; i < Math.min(CONFIG.CONCURRENT, room, currentId); i++) {
+                    batchIds.push(currentId - i);
                 }
+                totalChecked += batchIds.length;
 
-                if (batch.length === 0) return [];
-
-                const promises = batch.map(amId =>
+                const batchResults = await Promise.all(batchIds.map(amId =>
                     this.fetchMoment(amId).then(data => {
-                        totalChecked++;
-                        // API返回 { result: 0, moment: { momentId, ... } }
                         if (data && data.result === 0 && data.moment) {
-                            results.push({ ...data, _amId: amId });
-                            return { amId, found: true };
+                            const moment = data.moment;
+                            if (opts.skipFansOnly && moment.visibleForFans) {
+                                return { amId, fansOnly: true };
+                            }
+                            const ageMs = utils.parseRelativeMs(moment.createTime);
+                            if (opts.stopAfterMs != null && ageMs > opts.stopAfterMs) {
+                                return { amId, tooOld: true };
+                            }
+                            return { amId, found: true, moment: data };
                         }
                         return { amId, found: false };
                     })
-                );
+                ));
 
-                return Promise.all(promises);
-            };
-
-            while (totalChecked < maxCount && currentId > 0) {
-                if (currentStep === 1) {
-                    // 密集查找
-                    const batchResults = await probeBatch(currentId, Math.min(CONFIG.CONCURRENT, maxCount - totalChecked));
-
-                    if (batchResults.length === 0) break;
-
-                    let batchFound = 0;
-                    for (const r of batchResults) {
-                        if (r.found) {
-                            batchFound++;
-                            emptyCount = 0;
-                        } else {
-                            emptyCount++;
-                        }
-                    }
-
-                    foundCount += batchFound;
-                    currentId -= batchResults.length;
-
-                    // 找到数据，直接大跳（跳过小跳阶段）
-                    if (foundCount >= CONFIG.JUMP_THRESHOLD) {
-                        jumpBackId = currentId;
-                        currentStep = CONFIG.JUMP_STEP_LARGE;
-                        foundCount = 0;
-                        utils.log(`连续找到数据，直接大跳: ${currentStep}`);
-                    }
-
-                } else {
-                    // 跳跃查找
-                    const batchResults = await probeBatch(currentId, 1);
-                    const found = batchResults[0]?.found;
-
-                    if (found) {
-                        foundCount++;
-                        emptyCount = 0;
-
-                        if (currentStep < CONFIG.JUMP_STEP_LARGE) {
-                            currentStep = Math.min(currentStep * 3, CONFIG.JUMP_STEP_LARGE);
-                            utils.log(`跳跃点有数据，步长增加到: ${currentStep}`);
-                        }
-
-                        currentId -= currentStep;
-                    } else {
-                        // 回退密集查找
-                        utils.log(`跳跃点无数据，回退到 am${jumpBackId}`);
-                        currentId = jumpBackId;
-                        currentStep = 1;
-                        foundCount = 0;
-                        emptyCount++;
-                    }
+                let shouldStop = false;
+                for (const r of batchResults) {
+                    if (r.fansOnly) continue;
+                    if (r.tooOld) { shouldStop = true; break; }
+                    if (r.found) { emptyCount = 0; results.push({ ...r.moment, _amId: r.amId }); }
+                    else emptyCount++;
                 }
+                currentId -= batchIds.length;
 
-                if (emptyCount >= CONFIG.MAX_EMPTY) {
-                    utils.log(`连续 ${emptyCount} 个空号，停止`);
-                    break;
-                }
+                if (shouldStop) { utils.log('向下爬到 >24h，停止'); break; }
+                if (emptyCount >= CONFIG.MAX_EMPTY) { utils.log(`连续 ${emptyCount} 个空号，停止`); break; }
+                await new Promise(r => setTimeout(r, 60));
             }
 
-            utils.log(`查找完成: 检查 ${totalChecked} 个，找到 ${results.length} 条`);
-
-            // 去重 + 按am号排序（大的在前）
-            const seen = new Set();
-            const unique = results.filter(m => {
-                const id = m._amId || m.momentId;
-                if (seen.has(id)) return false;
-                seen.add(id);
-                return true;
-            });
-            unique.sort((a, b) => (b._amId || b.momentId) - (a._amId || a.momentId));
-
-            return unique;
+            results.sort((a, b) => b._amId - a._amId);
+            return results;
         }
     };
 
-    // 渲染器
+    // ===================== 渲染器 =====================
     const renderer = {
-        // 从原生页面获取互动区HTML
         _cachedInteractiveHtml: null,
 
         getInteractiveHtml() {
             if (this._cachedInteractiveHtml) return this._cachedInteractiveHtml;
 
-            // 从原生页面克隆（iconfont字符在克隆时保留）
             const nativeFeed = document.querySelector('.ac-member-feed:not(.moment-plaza-item) .feed-interactive');
             if (nativeFeed) {
                 const clone = nativeFeed.cloneNode(true);
@@ -1096,34 +1110,132 @@
                 this._cachedInteractiveHtml = clone.outerHTML;
                 return this._cachedInteractiveHtml;
             }
-
             return '';
         },
 
+        // 把某个互动区元素里的数字（文本节点）替换为加载点
+        _replaceNumWithLoading(el) {
+            const nodes = el.childNodes;
+            for (let i = nodes.length - 1; i >= 0; i--) {
+                if (nodes[i].nodeType === 3 && nodes[i].textContent.trim()) {
+                    const span = document.createElement('span');
+                    span.className = 'plaza-count-loading';
+                    nodes[i].parentNode.replaceChild(span, nodes[i]);
+                    return;
+                }
+            }
+            const span = document.createElement('span');
+            span.className = 'plaza-count-loading';
+            el.appendChild(span);
+        },
+
+        // 生成互动区 HTML。pending=true 时赞/评/投蕉数字显示加载动画
+        fillInteractive(moment, opts = {}) {
+            const pending = !!opts.pending;
+            const commentCount = moment.commentCount || 0;
+            const bananaCount = moment.bananaCount || 0;
+            const likeCount = moment.likeCount || 0;
+            const isLiked = moment.isLike || false;
+            const isBanana = moment.isThrowBanana || false;
+
+            let html = this.getInteractiveHtml();
+            if (!html) {
+                // 兜底：无原生结构时手写简化互动区
+                if (pending) {
+                    return `<div class="feed-interactive">
+                        <div class="feed-interactive-comment"><span class="plaza-count-loading"></span></div>
+                        <div class="feed-interactive-banana"><span class="plaza-count-loading"></span></div>
+                        <div class="feed-interactive-like"><span class="plaza-count-loading"></span></div>
+                        <div class="feed-interactive-repost"><span>分享</span></div>
+                    </div>`;
+                }
+                return `<div class="feed-interactive">
+                    <div class="feed-interactive-comment"><span>评论 ${utils.formatNumber(commentCount)}</span></div>
+                    <div class="feed-interactive-banana"><span>投蕉 ${utils.formatNumber(bananaCount)}</span></div>
+                    <div class="feed-interactive-like"><span>赞 ${utils.formatNumber(likeCount)}</span></div>
+                    <div class="feed-interactive-repost"><span>分享</span></div>
+                </div>`;
+            }
+
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = html;
+
+            // 评论数
+            const commentDiv = tempDiv.querySelector('.feed-interactive-comment');
+            if (commentDiv) {
+                if (pending) {
+                    this._replaceNumWithLoading(commentDiv);
+                } else {
+                    const nodes = commentDiv.childNodes;
+                    for (let i = nodes.length - 1; i >= 0; i--) {
+                        if (nodes[i].nodeType === 3 && nodes[i].textContent.trim()) {
+                            nodes[i].textContent = utils.formatNumber(commentCount) + '\n    ';
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // 香蕉数
+            const bananaDiv = tempDiv.querySelector('.feed-interactive-banana');
+            if (bananaDiv) {
+                if (isBanana) bananaDiv.setAttribute('active', '');
+                const span = bananaDiv.querySelector('span:last-of-type');
+                if (span) {
+                    if (pending) {
+                        span.textContent = '';
+                        span.className = 'plaza-count-loading';
+                    } else {
+                        span.textContent = utils.formatNumber(bananaCount);
+                    }
+                }
+            }
+
+            // 点赞数
+            const likeDiv = tempDiv.querySelector('.feed-interactive-like');
+            if (likeDiv) {
+                if (isLiked) likeDiv.setAttribute('active', '');
+                if (pending) {
+                    this._replaceNumWithLoading(likeDiv);
+                } else {
+                    const nodes = likeDiv.childNodes;
+                    for (let i = nodes.length - 1; i >= 0; i--) {
+                        if (nodes[i].nodeType === 3 && nodes[i].textContent.trim()) {
+                            nodes[i].textContent = utils.formatNumber(likeCount) + '\n    ';
+                            break;
+                        }
+                    }
+                }
+            }
+
+            return tempDiv.innerHTML;
+        },
+
         renderToolbar() {
+            const keepDays = utils.getKeepDays();
+            const opts = [1, 2, 3, 4, 5, 6, 7].map(d => `<option value="${d}"${d === keepDays ? ' selected' : ''}>${d}</option>`).join('');
             return `
                 <div class="moment-plaza-toolbar">
-                    <span class="status" id="fetch-status">加载中...</span>
+                    <span class="status" id="fetch-status" style="cursor:pointer;" title="点击刷新">加载中...</span>
                     <span class="status" id="up-status" style="color:#52c41a;font-size:12px;cursor:pointer;" title="点击刷新"></span>
+                    <span class="status" style="margin-left:12px;">保留 <select id="plaza-keep-days" style="border:1px solid #e5e5e5;border-radius:3px;padding:1px 4px;color:#666;">${opts}</select> 天内的数据</span>
                 </div>
             `;
         },
 
-        renderCard(data) {
-            // API返回格式: { moment: { ... } }
-            const moment = data.moment || data;
+        // record: { amId, absTs, data, fetchedAt }
+        renderCard(record, opts = {}) {
+            const pending = !!opts.pending;
+            const moment = record.data || record.moment || record;
             const user = moment.user || {};
 
             const userId = user.id || user.userId || '';
             const userName = user.name || '';
-            // 头像优先使用headCdnUrls，添加图片处理参数
             const userAvatar = (user.headCdnUrls?.[0]?.url || user.headUrl || '') + '?imageMogr2/auto-orient/format/webp/quality/80!/ignore-error/1';
 
-            // 内容（解析UBB表情）
             const rawText = moment.text || moment.replaceUbbText || '';
             const text = utils.parseContent(rawText);
 
-            // 图片（API字段: imgs）
             const images = moment.imgs || [];
             let imageHtml = '';
             if (images.length > 0) {
@@ -1135,76 +1247,18 @@
                 imageHtml = `<div class="member-feed-moment-image member-feed-moment-image-${imgCount}">${imgTags}</div>`;
             }
 
-            // 互动数据
-            const commentCount = moment.commentCount || 0;
-            const bananaCount = moment.bananaCount || 0;
-            const likeCount = moment.likeCount || 0;
-
-            // 时间（API返回的是相对时间字符串如"40分钟前"）
-            const createTime = moment.createTime || '';
-            const amId = moment.momentId || data._amId;
-
-            // 粉丝可见
+            const amId = record.amId || moment.momentId;
             const fansOnly = moment.visibleForFans || false;
 
-            // 用户名颜色（根据nameColor）
             const nameColor = user.nameColor;
-            let nameColorStyle = '';
-            if (nameColor === 2) {
-                nameColorStyle = 'color:#964cfd;'; // 紫色
-            } else {
-                nameColorStyle = 'color:#fd4c5c;'; // 默认红色
-            }
+            const nameColorStyle = nameColor === 2 ? 'color:#964cfd;' : 'color:#fd4c5c;';
 
-            // 从原生页面克隆互动区HTML（含iconfont字符和Vue data-v属性）
-            // 评论数：在</span>之后、</div>之前的数字
-            // 香蕉数：<span>包裹的数字
-            // 点赞数：like div内最后一个数字
-            const isLiked = moment.isLike || false;
-            const isBanana = moment.isThrowBanana || false;
+            // 展示时间：优先用存储的绝对时间戳动态计算，保证准确
+            const absTs = record.absTs || utils.computeAbsTs(moment.createTime, Date.now());
+            const createTime = utils.formatTime(absTs) || moment.createTime || '';
 
-            let interactiveHtml = this.getInteractiveHtml();
+            const interactiveHtml = this.fillInteractive(moment, { pending });
 
-            // 用DOM操作替代正则，更可靠
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = interactiveHtml;
-
-            // 评论数
-            const commentDiv = tempDiv.querySelector('.feed-interactive-comment');
-            if (commentDiv) {
-                const nodes = commentDiv.childNodes;
-                for (let i = nodes.length - 1; i >= 0; i--) {
-                    if (nodes[i].nodeType === 3 && nodes[i].textContent.trim()) {
-                        nodes[i].textContent = utils.formatNumber(commentCount) + '\n    ';
-                        break;
-                    }
-                }
-            }
-
-            // 香蕉数
-            const bananaDiv = tempDiv.querySelector('.feed-interactive-banana');
-            if (bananaDiv) {
-                if (isBanana) bananaDiv.setAttribute('active', '');
-                const span = bananaDiv.querySelector('span:last-of-type');
-                if (span) span.textContent = utils.formatNumber(bananaCount);
-            }
-
-            // 点赞数
-            const likeDiv = tempDiv.querySelector('.feed-interactive-like');
-            if (likeDiv) {
-                if (isLiked) likeDiv.setAttribute('active', '');
-                const nodes = likeDiv.childNodes;
-                for (let i = nodes.length - 1; i >= 0; i--) {
-                    if (nodes[i].nodeType === 3 && nodes[i].textContent.trim()) {
-                        nodes[i].textContent = utils.formatNumber(likeCount) + '\n    ';
-                        break;
-                    }
-                }
-            }
-
-            interactiveHtml = tempDiv.innerHTML;
-
-            // 完全复用原生HTML结构
             return `
                 <div class="ac-member-feed moment-plaza-item" data-am-id="${amId}">
                     ${fansOnly ? `
@@ -1259,7 +1313,6 @@
             const isUp = comment.isUp;
             const isCommentLiked = comment.isLiked || false;
 
-            // 子评论（楼中楼）
             const subComments = comment.subComments || [];
             const subHtml = subComments.length > 0
                 ? `<div class="area-comment-sec clearfix"><div class="area-sec-list">${subComments.map(s => this.renderComment(s, amId, true)).join('')}</div></div>`
@@ -1318,7 +1371,6 @@
             const subMap = data.subCommentsMap || {};
             if (comments.length === 0) return editor + '<div class="plaza-comment-empty">暂无评论</div>';
 
-            // 把子评论挂到父评论上（subCommentsMap[id].subComments）
             const enriched = comments.map(c => {
                 const id = c.commentId?.toString();
                 const subEntry = subMap[id];
@@ -1334,26 +1386,24 @@
             `;
         },
 
-        renderList(moments) {
-            if (moments.length === 0) {
+        renderList(records) {
+            if (records.length === 0) {
                 return '<div class="moment-plaza-empty">正在加载动态...</div>';
             }
 
-            // 按am号排序，大的在前（新的在前）
-            const sorted = [...moments].sort((a, b) => {
-                const idA = parseInt(a.moment?.momentId || a.momentId || a._amId || 0);
-                const idB = parseInt(b.moment?.momentId || b.momentId || b._amId || 0);
-                return idB - idA;
-            });
-
-            return `<div class="moment-plaza-list">${sorted.map(m => this.renderCard(m)).join('')}</div>`;
+            const now = Date.now();
+            const sorted = [...records].sort((a, b) => (b.amId || 0) - (a.amId || 0));
+            return `<div class="moment-plaza-list">${sorted.map(r => {
+                const absTs = r.absTs;
+                const pending = !!absTs && (now - absTs) <= CONFIG.FRESH_WINDOW_MS;
+                return this.renderCard(r, { pending });
+            }).join('')}</div>`;
         }
     };
 
-    // 主控制器
+    // ===================== 主控制器 =====================
     const app = {
         init() {
-            // /member 页面：注入侧边栏 + 后台静默加载
             if (window.location.pathname.startsWith('/member')) {
                 this.setupNavigation();
                 this.startBackgroundWork();
@@ -1364,141 +1414,85 @@
             }
         },
 
-        // 启动：有am号就开始向上查找
+        // 启动：有 am 号就开启向上后台定时爬取 + 过期清理
         startBackgroundWork() {
             const knownAmId = utils.getLastAmId();
             if (!knownAmId || knownAmId <= 0) return;
 
             state.latestAmId = knownAmId;
-            this._startUpwardLoop();
+            this._startUpwardPoll();
+            this._cleanupExpired();
         },
 
-        // ========== 向上查找（找20条新的就停，到顶了提示不足） ==========
-        async _startUpwardLoop() {
+        // ========== 向上爬取（后台定时，按时间差距判断） ==========
+        _startUpwardPoll() {
+            if (state._upPollTimer) return;
+            this._upPollTick();
+            state._upPollTimer = setInterval(() => this._upPollTick(), CONFIG.UP_POLL_INTERVAL);
+        },
+
+        _stopUpwardPoll() {
+            if (state._upPollTimer) {
+                clearInterval(state._upPollTimer);
+                state._upPollTimer = null;
+            }
+        },
+
+        async _upPollTick() {
+            if (state._upRunning) return;
+
+            // 数据库最新动态距今 > 1 小时才向上爬
+            const latestAbsTs = await db.getLatestAbsTs();
+            const gap = latestAbsTs ? Date.now() - latestAbsTs : Infinity;
+            if (gap <= CONFIG.UP_POLL_GAP_MS) return;
+
+            this._runUpwardSearch();
+        },
+
+        async _runUpwardSearch() {
             if (state._upRunning) return;
             state._upRunning = true;
 
-            let cursor = state.latestAmId + 1;
-            let emptyCount = 0;
-            let step = 1;
-            let foundNew = 0;
-            const MAX_NEW = 20;
-            let hitCeiling = false;
-
-            utils.log('向上查找启动, 起点 am', cursor);
             const upStatus = document.getElementById('up-status');
             const updateUp = (t) => { if (upStatus) upStatus.textContent = t; };
+            updateUp('↑查找新动态...');
 
-            updateUp('↑正在查找新动态');
+            try {
+                const newMoments = await api.fetchNewMoments(state.latestAmId, 50, {
+                    skipFansOnly: true,
+                    stopAtMs: CONFIG.UP_STOP_AT_MS
+                });
 
-            while (state._upRunning && foundNew < MAX_NEW) {
-                const ids = [];
-                for (let i = 0; i < step && i < CONFIG.CONCURRENT; i++) {
-                    ids.push(cursor + i);
-                }
-
-                const results = await Promise.all(ids.map(id =>
-                    api.fetchMoment(id).then(data => ({
-                        id,
-                        found: data && data.result === 0 && data.moment,
-                        data: data?.result === 0 ? data : null
-                    }))
-                ));
-
-                let foundAny = false;
-                for (const r of results) {
-                    if (r.found) {
-                        if (r.id > state._upLatestAm) {
-                            state._upLatestAm = r.id;
-                            foundNew++;
-                        }
-                        foundAny = true;
-                        emptyCount = 0;
+                if (newMoments.length) {
+                    const records = await this._storeMoments(newMoments);
+                    const maxAm = Math.max(...records.map(r => r.amId));
+                    if (maxAm > state.latestAmId) {
+                        state.latestAmId = maxAm;
+                        utils.setLastAmId(maxAm);
                     }
-                }
-
-                if (foundAny) {
-                    cursor += ids.length;
-                    updateUp(`↑已发现 ${foundNew} 条新动态`);
-                    if (foundNew >= MAX_NEW) break;
-
-                    const lastMoment = results.filter(r => r.found).pop()?.data;
-                    if (lastMoment) step = this._calcUpStep(lastMoment.moment?.createTime);
+                    updateUp(`↑发现 ${records.length} 条新动态，点击刷新`);
                 } else {
-                    emptyCount += ids.length;
-                    cursor += ids.length;
-
-                    if (emptyCount >= 8) {
-                        updateUp('↑正在确认是否到顶...');
-                        const jumpId = cursor + 20;
-                        const probe = await api.fetchMoment(jumpId);
-                        if (probe && probe.result === 0 && probe.moment) {
-                            cursor = jumpId;
-                            emptyCount = 0;
-                            step = this._calcUpStep(probe.moment?.createTime);
-                        } else {
-                            hitCeiling = true;
-                            break;
-                        }
-                    }
+                    updateUp('');
                 }
-
-                await new Promise(r => setTimeout(r, 80));
-            }
-
-            // 查找结束
-            if (foundNew > 0) {
-                if (hitCeiling && foundNew < MAX_NEW) {
-                    updateUp(`↑发现 ${foundNew} 条新动态（已到顶），点击刷新`);
-                } else {
-                    updateUp(`↑发现 ${foundNew} 条新动态，点击刷新`);
-                }
-            } else {
-                updateUp(hitCeiling ? '已是最新' : '');
-            }
-            state._upRunning = false;
-        },
-
-        // 根据发布时间估算步长
-        _calcUpStep(createTime) {
-            if (!createTime) return 1;
-            const minutes = this._parseTimeToMinutes(createTime);
-            if (minutes <= 0) return 1;      // 刚刚/几秒前 → 已到顶，步长1
-            if (minutes <= 5) return 1;       // 5分钟内 → 密集区，逐个找
-            if (minutes <= 30) return 3;      // 30分钟 → 小跳
-            if (minutes <= 120) return 5;     // 2小时内 → 中跳
-            if (minutes <= 1440) return 10;   // 24小时内 → 大跳
-            return 20;                        // 超过1天 → 最大跳
-        },
-
-        // 解析相对时间为分钟数
-        _parseTimeToMinutes(text) {
-            const m = text.match(/(\d+)\s*(秒|分钟|小时|天)/);
-            if (!m) return 0;
-            const n = parseInt(m[1]);
-            switch (m[2]) {
-                case '秒': return 0;
-                case '分钟': return n;
-                case '小时': return n * 60;
-                case '天': return n * 1440;
-                default: return 0;
+            } finally {
+                state._upRunning = false;
             }
         },
 
-        // 停止向上查找
-        _stopUpwardLoop() {
-            state._upRunning = false;
-            if (state._upTimer) {
-                clearTimeout(state._upTimer);
-                state._upTimer = null;
+        // ========== 过期清理 ==========
+        async _cleanupExpired() {
+            try {
+                const keepDays = utils.getKeepDays();
+                const cutoff = Date.now() - keepDays * 86400000;
+                await db.deleteOlderThan(cutoff);
+            } catch (e) {
+                utils.log('清理过期数据失败:', e);
             }
-            const upStatus = document.getElementById('up-status');
-            if (upStatus) upStatus.textContent = '';
         },
 
+        // ========== 导航注入 ==========
         setupNavigation() {
             const checkNav = setInterval(() => {
-                // 尝试多种选择器找到侧边栏
                 const feedsNav = document.querySelector('.sub-nav-title a[href="/member/feeds"]')
                     || document.querySelector('a[href="/member/feeds"]')
                     || document.querySelector('.ac-member-navigation a[href*="/feeds"]');
@@ -1507,14 +1501,12 @@
                     this.addPlazaNavItem(feedsNav);
                 }
             }, 500);
-            // 10秒后停止查找
             setTimeout(() => clearInterval(checkNav), 10000);
         },
 
         addPlazaNavItem(feedsNav) {
             if (document.querySelector('.plaza-nav-item')) return;
 
-            // 拦截"关注动态"点击：退回原界面并刷新页面
             const feedsLink = feedsNav.querySelector('a[href="/member/feeds"]') || feedsNav;
             if (feedsLink.tagName === 'A') {
                 feedsLink.addEventListener('click', (e) => {
@@ -1524,11 +1516,9 @@
                         e.stopPropagation();
                         location.reload();
                     }
-                    // 非广场状态则走默认导航
                 });
             }
 
-            // 动态广场按钮
             const plazaItem = document.createElement('a');
             plazaItem.href = 'javascript:void(0)';
             plazaItem.className = 'ac-member-navigation-item ac-member-navigation-sub-item plaza-nav-item';
@@ -1548,7 +1538,6 @@
                     subNavGroup.appendChild(plazaItem);
                 }
 
-                // 点击其他导航时取消动态广场选中
                 subNavGroup.querySelectorAll('a:not(.plaza-nav-item)').forEach(link => {
                     link.addEventListener('click', () => {
                         plazaItem.classList.remove('ac-member-navigation-item-active');
@@ -1556,7 +1545,6 @@
                 });
             }
 
-            // 点击"关注动态"主标题也取消选中
             feedsNav.addEventListener('click', () => {
                 plazaItem.classList.remove('ac-member-navigation-item-active');
             });
@@ -1566,14 +1554,12 @@
         enterPlaza() {
             const mainContent = document.querySelector('.ac-member-main .ac-member-feeds');
 
-            // 非 feeds 页面：跳转并标记自动进入
             if (!mainContent) {
                 GM_setValue('moment_plaza_auto_enter', true);
                 window.location.href = '/member/feeds';
                 return;
             }
 
-            // 始终设置选中样式
             document.querySelector('a[href="/member/feeds"]')?.classList.remove('ac-member-navigation-item-active');
             document.querySelector('.plaza-nav-item')?.classList.add('ac-member-navigation-item-active');
 
@@ -1587,44 +1573,37 @@
             }
         },
 
-        // 刷新广场（点击"动态广场"时调用）
+        // 刷新广场（点击刷新时调用）：预渲染 DB 最新 20 条
         async refreshPlaza() {
-            this._stopUpwardLoop();
+            this._stopUpwardPoll();
 
             const statusEl = document.getElementById('fetch-status');
-            const upStatus = document.getElementById('up-status');
             const updateStatus = (t) => { if (statusEl) statusEl.textContent = t; };
+            const upStatus = document.getElementById('up-status');
+            if (upStatus) upStatus.textContent = '';
             updateStatus('正在刷新...');
 
-            // 取向上查找到的最新am号
-            if (state._upLatestAm > state.latestAmId) {
-                state.latestAmId = state._upLatestAm;
-            }
-            utils.setLastAmId(state.latestAmId);
-            state._upLatestAm = 0;
-
-            // 实时抓取最新20条（刷新点赞评论等数据）
             state._downLoading = false;
             state._noMoreDown = false;
 
-            const moments = await this._fetchMomentsDown(state.latestAmId);
-            state.moments = moments;
-            if (moments.length > 0) {
-                state.oldestAmId = Math.min(...moments.map(m => m._amId || Infinity));
-                // 更新最新am号
-                const maxAm = Math.max(...moments.map(m => m._amId || 0));
-                if (maxAm > state.latestAmId) {
-                    state.latestAmId = maxAm;
-                    utils.setLastAmId(maxAm);
+            const records = await this._loadBatch(state.latestAmId + 1, CONFIG.BATCH_SIZE);
+
+            state.moments = records;
+            if (records.length) {
+                state.oldestAmId = Math.min(...records.map(r => r.amId));
+                const oldestAbs = records[records.length - 1]?.absTs;
+                if (records.length < CONFIG.BATCH_SIZE || (oldestAbs && (Date.now() - oldestAbs) > CONFIG.DOWN_STOP_AFTER_MS)) {
+                    state._noMoreDown = true;
                 }
             }
             this._renderList();
-
             updateStatus(`共 ${state.moments.length} 条动态，向下滚动加载更多`);
-            if (upStatus) upStatus.textContent = '';
 
-            // 重启向上循环
-            this._startUpwardLoop();
+            // 后台注入 ≤3h 的互动数据
+            this._freshnessUpdate(records);
+
+            this._startUpwardPoll();
+            this._cleanupExpired();
         },
 
         async showPlazaView() {
@@ -1632,19 +1611,14 @@
             if (!mainContent) return;
 
             renderer.getInteractiveHtml();
-
             if (!this._originalContent) {
                 this._originalContent = mainContent.innerHTML;
             }
 
-            // 取_upLatestAm（向上查找找到的）
-            if (state._upLatestAm > state.latestAmId) {
-                state.latestAmId = state._upLatestAm;
-                utils.setLastAmId(state.latestAmId);
-            }
-
-            // 没有am号 → 显示链接输入框
+            // 没有 am 号 → 首次设置框
             if (!state.latestAmId || state.latestAmId <= 0) {
+                const keepDays = utils.getKeepDays();
+                const opts = [1, 2, 3, 4, 5, 6, 7].map(d => `<option value="${d}"${d === keepDays ? ' selected' : ''}>${d}</option>`).join('');
                 mainContent.innerHTML = `
                     <div class="moment-plaza-container">
                         <div class="plaza-setup-box">
@@ -1655,6 +1629,9 @@
                                 <input id="plaza-link-input" type="text" placeholder="粘贴动态链接..." style="flex:1;height:36px;padding:0 10px;border:1px solid #e5e5e5;border-radius:4px;font-size:14px;outline:none;" />
                                 <button id="plaza-link-btn" style="height:36px;padding:0 20px;background:#fd4c5c;color:#fff;border:none;border-radius:4px;font-size:14px;cursor:pointer;">确定</button>
                             </div>
+                            <div style="margin-top:16px;font-size:13px;color:#666;">保留
+                                <select id="plaza-setup-keep-days" style="border:1px solid #e5e5e5;border-radius:3px;padding:2px 4px;">${opts}</select> 天内的数据
+                            </div>
                         </div>
                     </div>
                 `;
@@ -1662,7 +1639,6 @@
                 return;
             }
 
-            // 有am号 → 正常展示
             state.moments = [];
             mainContent.innerHTML = `
                 <div class="moment-plaza-container">
@@ -1682,33 +1658,120 @@
             }
             this.bindEvents();
             this._setupScrollListener();
+            this._bindKeepDaysSelect();
 
             const statusEl = document.getElementById('fetch-status');
             if (statusEl) statusEl.textContent = '正在加载...';
 
-            const moments = await this._fetchMomentsDown(state.latestAmId);
-            state.moments = moments;
-            if (moments.length > 0) {
-                state.oldestAmId = Math.min(...moments.map(m => m._amId || Infinity));
-                const maxAm = Math.max(...moments.map(m => m._amId || 0));
-                if (maxAm > state.latestAmId) {
-                    state.latestAmId = maxAm;
-                    utils.setLastAmId(maxAm);
+            const records = await this._loadBatch(state.latestAmId + 1, CONFIG.BATCH_SIZE);
+
+            state.moments = records;
+            if (records.length) {
+                state.oldestAmId = Math.min(...records.map(r => r.amId));
+                const oldestAbs = records[records.length - 1]?.absTs;
+                if (records.length < CONFIG.BATCH_SIZE || (oldestAbs && (Date.now() - oldestAbs) > CONFIG.DOWN_STOP_AFTER_MS)) {
+                    state._noMoreDown = true;
                 }
             }
             this._renderList();
             if (statusEl) statusEl.textContent = `共 ${state.moments.length} 条动态，向下滚动加载更多`;
+
+            this._freshnessUpdate(records);
+            this._startUpwardPoll();
+            this._cleanupExpired();
         },
 
-        // 首次使用：绑定链接输入事件
+        // ========== 数据流核心 ==========
+        // 从库预渲染 count 条（amId < fromId），不足则实时抓取补足
+        async _loadBatch(fromId, count) {
+            let records = await db.getOlderThan(fromId, count);
+            if (records.length < count) {
+                const fetchFrom = records.length ? records[records.length - 1].amId : fromId;
+                const need = count - records.length;
+                const fetched = await this._fetchAndStoreDown(fetchFrom, need);
+                records = records.concat(fetched);
+                records.sort((a, b) => b.amId - a.amId);
+            }
+            return records;
+        },
+
+        // 实时抓取一批（跳过粉丝可见、>24h 停），存库并返回记录
+        async _fetchAndStoreDown(fromAmId, targetCount) {
+            const moments = await api.fetchOldMoments(fromAmId, targetCount, {
+                skipFansOnly: true,
+                stopAfterMs: CONFIG.DOWN_STOP_AFTER_MS
+            });
+            return this._storeMoments(moments);
+        },
+
+        // moments（含 _amId）→ 记录（含 absTs），存库
+        async _storeMoments(moments) {
+            const records = [];
+            const now = Date.now();
+            for (const m of moments) {
+                const moment = m.moment || m;
+                const amId = parseInt(m._amId || moment.momentId);
+                if (!amId) continue;
+                if (moment.visibleForFans) continue;
+                const absTs = utils.computeAbsTs(moment.createTime, now);
+                records.push({ amId, absTs, data: moment, fetchedAt: now });
+            }
+            if (records.length) {
+                await db.putMoments(records);
+            }
+            return records;
+        },
+
+        // 对 ≤3h 的记录后台拉取最新，注入互动数字
+        async _freshnessUpdate(records) {
+            if (!records || !records.length) return;
+            const now = Date.now();
+            const fresh = records.filter(r => r.absTs && (now - r.absTs) <= CONFIG.FRESH_WINDOW_MS);
+            if (!fresh.length) return;
+            await Promise.all(fresh.map(r => this._injectFresh(r.amId)));
+        },
+
+        async _injectFresh(amId) {
+            const data = await api.fetchMoment(amId);
+            if (!data || data.result !== 0 || !data.moment) return;
+            const moment = data.moment;
+
+            const record = state.moments.find(m => m.amId == amId);
+            const absTs = record?.absTs || utils.computeAbsTs(moment.createTime, Date.now());
+            await db.putMoment({ amId, absTs, data: moment, fetchedAt: Date.now() });
+            if (record) record.data = moment;
+
+            const card = document.querySelector(`.moment-plaza-item[data-am-id="${amId}"]`);
+            const interactiveEl = card?.querySelector('.member-feed-interactive');
+            if (interactiveEl) {
+                interactiveEl.innerHTML = renderer.fillInteractive(moment, { pending: false });
+            }
+        },
+
+        _renderList() {
+            const listEl = document.getElementById('moment-list');
+            if (listEl) listEl.innerHTML = renderer.renderList(state.moments);
+        },
+
+        // 首次使用：绑定链接输入 + 保留天数
         _bindSetupEvents(mainContent) {
             const input = document.getElementById('plaza-link-input');
             const btn = document.getElementById('plaza-link-btn');
+            const keepDaysSel = document.getElementById('plaza-setup-keep-days');
+
+            if (keepDaysSel) {
+                keepDaysSel.addEventListener('change', (e) => {
+                    utils.setKeepDays(parseInt(e.target.value) || CONFIG.KEEP_DAYS_DEFAULT);
+                });
+            }
+
             if (!input || !btn) return;
 
             const parseAndStart = () => {
+                if (keepDaysSel) {
+                    utils.setKeepDays(parseInt(keepDaysSel.value) || CONFIG.KEEP_DAYS_DEFAULT);
+                }
                 const value = input.value.trim();
-                // 从链接解析am号：https://www.acfun.cn/moment/am5073277
                 const match = value.match(/am(\d+)/);
                 if (!match) {
                     alert('无法解析链接，请确认格式正确\n示例：https://www.acfun.cn/moment/am5073277');
@@ -1717,7 +1780,6 @@
                 const amId = parseInt(match[1]);
                 state.latestAmId = amId;
                 utils.setLastAmId(amId);
-                // 重新加载广场
                 this.showPlazaView();
             };
 
@@ -1727,8 +1789,16 @@
             });
         },
 
+        _bindKeepDaysSelect() {
+            const sel = document.getElementById('plaza-keep-days');
+            if (!sel) return;
+            sel.addEventListener('change', (e) => {
+                utils.setKeepDays(parseInt(e.target.value) || CONFIG.KEEP_DAYS_DEFAULT);
+                this._cleanupExpired();
+            });
+        },
+
         _setupScrollListener() {
-            // 清理旧监听
             if (state._scrollHandler) {
                 window.removeEventListener('scroll', state._scrollHandler);
                 document.removeEventListener('scroll', state._scrollHandler);
@@ -1739,34 +1809,28 @@
                 const windowHeight = window.innerHeight;
                 const docHeight = document.documentElement.scrollHeight;
 
-                // 回到顶部按钮显隐
                 const backTop = document.querySelector('.plaza-back-top');
                 if (backTop) {
                     backTop.classList.toggle('visible', scrollTop > 300);
                 }
 
-                // 滚动加载
                 const nearBottom = scrollTop + windowHeight >= docHeight - 300;
                 if (!state._downLoading && !state._noMoreDown && nearBottom) {
-                    utils.log('触底加载, scrollTop:', scrollTop, 'windowHeight:', windowHeight, 'docHeight:', docHeight, 'oldestAmId:', state.oldestAmId);
                     this._fetchNextBatch();
                 }
             };
 
             window.addEventListener('scroll', state._scrollHandler, { passive: true });
-            // 也监听document的scroll（兼容不同滚动容器）
             document.addEventListener('scroll', state._scrollHandler, { passive: true });
         },
 
-        // 向下加载下一批（滚动触发，实时抓取）
+        // 触底向下加载：固定 20 条，库充足直接预渲染，不足实时抓取
         async _fetchNextBatch() {
-            utils.log('_fetchNextBatch called, _downLoading:', state._downLoading, '_noMoreDown:', state._noMoreDown, 'oldestAmId:', state.oldestAmId);
             if (state._downLoading || state._noMoreDown) return;
 
-            const startId = state.oldestAmId;
-            if (!startId || startId <= 0) {
+            const fromId = state.oldestAmId;
+            if (!fromId || fromId <= 0) {
                 state._noMoreDown = true;
-                utils.log('无更多: oldestAmId无效');
                 return;
             }
 
@@ -1777,61 +1841,47 @@
                 loadMoreEl.textContent = '加载中...';
             }
 
-            const moments = await this._fetchMomentsDown(startId);
-            utils.log('_fetchNextBatch获取到:', moments?.length, '条');
-
-            if (moments.length === 0) {
-                state._noMoreDown = true;
-                if (loadMoreEl) {
-                    loadMoreEl.className = 'plaza-load-more';
-                    loadMoreEl.textContent = '已加载全部动态';
+            try {
+                const cached = await db.getOlderThan(fromId, CONFIG.BATCH_SIZE);
+                let fetched = [];
+                const need = CONFIG.BATCH_SIZE - cached.length;
+                if (need > 0) {
+                    const fetchFrom = cached.length ? cached[cached.length - 1].amId : fromId;
+                    fetched = await this._fetchAndStoreDown(fetchFrom, need);
                 }
-            } else {
-                // 去重
-                const existingIds = new Set(state.moments.map(m => m._amId || m.moment?.momentId));
-                const newMoments = moments.filter(m => {
-                    const id = m._amId || m.moment?.momentId;
-                    return !existingIds.has(id);
-                });
-                utils.log('去重: 原始', moments.length, '已有', existingIds.size, '新增', newMoments.length);
 
-                if (newMoments.length > 0) {
-                    state.moments = [...state.moments, ...newMoments];
-                    state.oldestAmId = Math.min(...newMoments.map(m => m._amId || Infinity));
-                    utils.log('渲染列表, moments:', state.moments.length, 'oldestAmId:', state.oldestAmId);
-                    try {
-                        this._renderList();
-                        utils.log('渲染完成');
-                    } catch (e) {
-                        utils.log('渲染失败:', e.message);
+                const merged = cached.concat(fetched).sort((a, b) => b.amId - a.amId);
+                const existing = new Set(state.moments.map(m => m.amId));
+                const newRecords = merged.filter(r => !existing.has(r.amId));
+
+                if (!newRecords.length) {
+                    state._noMoreDown = true;
+                    if (loadMoreEl) {
+                        loadMoreEl.className = 'plaza-load-more';
+                        loadMoreEl.textContent = '已加载全部动态';
                     }
                 } else {
-                    utils.log('去重后无新数据');
+                    state.moments.push(...newRecords);
+                    state.oldestAmId = Math.min(...newRecords.map(r => r.amId));
+
+                    // 实时抓取补不齐，或最旧一条已 >24h → 向下到底
+                    const fetchedShort = need > 0 && fetched.length < need;
+                    const oldestAbs = newRecords[newRecords.length - 1]?.absTs;
+                    if (fetchedShort || (oldestAbs && (Date.now() - oldestAbs) > CONFIG.DOWN_STOP_AFTER_MS)) {
+                        state._noMoreDown = true;
+                    }
+
+                    this._renderList();
+                    this._freshnessUpdate(newRecords);
+
+                    if (loadMoreEl) {
+                        loadMoreEl.className = 'plaza-load-more';
+                        loadMoreEl.textContent = state._noMoreDown ? '已加载全部动态' : '';
+                    }
                 }
-                if (loadMoreEl) {
-                    loadMoreEl.className = 'plaza-load-more';
-                    loadMoreEl.textContent = '';
-                }
+            } finally {
+                state._downLoading = false;
             }
-
-            state._downLoading = false;
-        },
-
-        // 从API实时获取一批动态（从startId向下）
-        async _fetchMomentsDown(startId, count = CONFIG.BATCH_SIZE) {
-            if (!startId || startId <= 0) return [];
-            try {
-                return await api.fetchOldMoments(startId, count);
-            } catch (e) {
-                utils.log('获取动态失败:', e);
-                return [];
-            }
-        },
-
-        // 更新列表显示
-        _renderList() {
-            const listEl = document.getElementById('moment-list');
-            if (listEl) listEl.innerHTML = renderer.renderList(state.moments);
         },
 
         showOriginalView() {
@@ -1847,7 +1897,6 @@
             if (this._eventsBound) return;
             this._eventsBound = true;
 
-            // 发评论API（用fetch，自动带cookie）
             const postComment = async (amId, content, replyToCommentId = 0) => {
                 const body = `sourceId=${amId}&sourceType=4&content=${encodeURIComponent(content)}` +
                     (replyToCommentId ? `&replyToCommentId=${replyToCommentId}` : '');
@@ -1866,7 +1915,6 @@
             };
 
             document.addEventListener('click', async (e) => {
-                // 点击状态栏刷新
                 if (e.target.closest('#up-status') || e.target.closest('#fetch-status')) {
                     this.refreshPlaza();
                     return;
@@ -1881,24 +1929,17 @@
                     const url = `https://www.acfun.cn/moment/am${amId}`;
                     try {
                         await navigator.clipboard.writeText(url);
-                        shareBtn.querySelector('span:last-child').textContent = '已复制';
-                        setTimeout(() => {
-                            const el = shareBtn.querySelector('span:last-child');
-                            if (el) el.textContent = '分享';
-                        }, 1500);
+                        const el = shareBtn.querySelector('span:last-child');
+                        if (el) { el.textContent = '已复制'; setTimeout(() => { el.textContent = '分享'; }, 1500); }
                     } catch {
-                        // fallback
                         const input = document.createElement('input');
                         input.value = url;
                         document.body.appendChild(input);
                         input.select();
                         document.execCommand('copy');
                         input.remove();
-                        shareBtn.querySelector('span:last-child').textContent = '已复制';
-                        setTimeout(() => {
-                            const el = shareBtn.querySelector('span:last-child');
-                            if (el) el.textContent = '分享';
-                        }, 1500);
+                        const el = shareBtn.querySelector('span:last-child');
+                        if (el) { el.textContent = '已复制'; setTimeout(() => { el.textContent = '分享'; }, 1500); }
                     }
                     return;
                 }
@@ -1909,8 +1950,8 @@
                     const card = likeBtn.closest('.moment-plaza-item');
                     if (!card) return;
                     const amId = card.dataset.amId;
-                    const moment = state.moments.find(m => (m.moment?.momentId || m._amId) == amId);
-                    const authorId = moment?.moment?.user?.id || moment?.moment?.user?.userId;
+                    const record = state.moments.find(m => m.amId == amId);
+                    const authorId = record?.data?.user?.id || record?.data?.user?.userId;
                     if (!authorId) return;
 
                     const isLiked = likeBtn.hasAttribute('active');
@@ -1918,7 +1959,6 @@
                     if (result) {
                         if (isLiked) likeBtn.removeAttribute('active');
                         else likeBtn.setAttribute('active', '');
-                        // 更新数字
                         const nodes = likeBtn.childNodes;
                         for (let i = nodes.length - 1; i >= 0; i--) {
                             if (nodes[i].nodeType === 3 && nodes[i].textContent.trim()) {
@@ -1927,11 +1967,10 @@
                                 break;
                             }
                         }
-                        // 更新本地数据
-                        const m = state.moments.find(m => (m.moment?.momentId || m._amId) == amId);
-                        if (m?.moment) {
-                            m.moment.isLike = !isLiked;
-                            m.moment.likeCount = (m.moment.likeCount || 0) + (isLiked ? -1 : 1);
+                        const m = state.moments.find(x => x.amId == amId);
+                        if (m?.data) {
+                            m.data.isLike = !isLiked;
+                            m.data.likeCount = (m.data.likeCount || 0) + (isLiked ? -1 : 1);
                         }
                     }
                     return;
@@ -1943,11 +1982,8 @@
                     const card = bananaBtn.closest('.moment-plaza-item');
                     if (!card) return;
                     const amId = card.dataset.amId;
-                    const moment = state.moments.find(m => (m.moment?.momentId || m._amId) == amId);
-                    const authorId = moment?.moment?.user?.id || moment?.moment?.user?.userId;
-                    if (!authorId) return;
 
-                    const result = await api.throwBanana(amId, authorId);
+                    const result = await api.throwBanana(amId);
                     if (result) {
                         if (result.result === 0) {
                             bananaBtn.setAttribute('active', '');
@@ -1956,10 +1992,10 @@
                                 const count = parseInt(numEl.textContent) || 0;
                                 numEl.textContent = count + 1;
                             }
-                            // 更新本地数据
-                            if (moment?.moment) {
-                                moment.moment.isThrowBanana = true;
-                                moment.moment.bananaCount = (moment.moment.bananaCount || 0) + 1;
+                            const m = state.moments.find(x => x.amId == amId);
+                            if (m?.data) {
+                                m.data.isThrowBanana = true;
+                                m.data.bananaCount = (m.data.bananaCount || 0) + 1;
                             }
                         } else if (result.error_msg) {
                             alert(result.error_msg);
@@ -1981,7 +2017,6 @@
                     const result = await api.likeComment(amId, commentId, isLiked);
                     if (result && result.result === 0) {
                         commentLikeBtn.classList.toggle('area-comment-up');
-                        // 更新点赞数量
                         const text = commentLikeBtn.textContent.trim();
                         const match = text.match(/\d+/);
                         const currentCount = match ? parseInt(match[0]) : 0;
@@ -1991,7 +2026,7 @@
                     return;
                 }
 
-                // 点击评论数 → 展开/收起评论
+                // 点击评论数 → 展开/收起评论（单条请求更新）
                 const commentBtn = e.target.closest('.feed-interactive-comment');
                 if (commentBtn) {
                     const card = commentBtn.closest('.moment-plaza-item');
@@ -2021,14 +2056,12 @@
                     return;
                 }
 
-                // 点击"回复"按钮 → 展开回复输入框（同时关闭其他）
+                // 点击"回复"按钮
                 const replyBtn = e.target.closest('.plaza-reply-btn');
                 if (replyBtn) {
                     const commentId = replyBtn.dataset.commentId;
                     const box = document.getElementById(`reply-box-${commentId}`);
-                    // 先关闭所有回复框
                     document.querySelectorAll('.plaza-reply-box').forEach(b => b.style.display = 'none');
-                    // 再打开当前的（如果之前是关的）
                     if (box && box.style.display === 'none') {
                         box.style.display = 'flex';
                         box.querySelector('input')?.focus();
@@ -2036,7 +2069,7 @@
                     return;
                 }
 
-                // 点击回复"发送"按钮
+                // 回复"发送"
                 const replySend = e.target.closest('.plaza-reply-send');
                 if (replySend) {
                     const amId = replySend.dataset.amId;
@@ -2052,13 +2085,11 @@
                         const newComment = renderer.renderComment(result, amId, true);
                         const commentItem = replySend.closest('.area-comment-top');
                         if (commentItem) {
-                            // 找到或创建子评论区
                             let secList = commentItem.querySelector('.area-sec-list');
                             if (!secList) {
                                 const secDiv = document.createElement('div');
                                 secDiv.className = 'area-comment-sec clearfix';
                                 secDiv.innerHTML = '<div class="area-sec-list"></div>';
-                                // 插入到hr之前
                                 const hr = commentItem.querySelector('hr');
                                 commentItem.insertBefore(secDiv, hr);
                                 secList = secDiv.querySelector('.area-sec-list');
@@ -2075,7 +2106,7 @@
                     return;
                 }
 
-                // 点击评论区的"发评论"按钮
+                // 发评论
                 const editorSend = e.target.closest('.plaza-editor-send');
                 if (editorSend) {
                     const amId = editorSend.dataset.amId;
@@ -2101,7 +2132,6 @@
                 }
             });
 
-            // 回复框回车发送
             document.addEventListener('keydown', async (e) => {
                 if (e.key !== 'Enter') return;
                 const input = e.target.closest('.plaza-reply-input');
@@ -2111,7 +2141,6 @@
                 }
             });
 
-            // 点击/聚焦顶部发评论输入框 → 关闭所有回复框
             document.addEventListener('focusin', (e) => {
                 if (e.target.closest('.plaza-editor-input')) {
                     document.querySelectorAll('.plaza-reply-box').forEach(b => b.style.display = 'none');
@@ -2120,7 +2149,6 @@
         },
 
         setupFeedsPage() {
-            // 从其他页面跳转过来，自动进入广场
             if (GM_getValue('moment_plaza_auto_enter', false)) {
                 GM_setValue('moment_plaza_auto_enter', false);
                 const waitForContent = setInterval(() => {
