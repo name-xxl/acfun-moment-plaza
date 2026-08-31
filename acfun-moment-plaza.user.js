@@ -1732,6 +1732,8 @@
         },
 
         async _injectFresh(amId) {
+            amId = parseInt(amId);
+            if (!amId) return;
             const data = await api.fetchMoment(amId);
             if (!data || data.result !== 0 || !data.moment) return;
             const moment = data.moment;
@@ -1745,6 +1747,12 @@
             const interactiveEl = card?.querySelector('.member-feed-interactive');
             if (interactiveEl) {
                 interactiveEl.innerHTML = renderer.fillInteractive(moment, { pending: false });
+                // 若评论区已展开，恢复评论按钮高亮（替换 HTML 会冲掉 active）
+                const commentContainer = document.getElementById(`comments-${amId}`);
+                if (commentContainer && commentContainer.style.display !== 'none') {
+                    const btn = interactiveEl.querySelector('.feed-interactive-comment');
+                    if (btn) btn.classList.add('active');
+                }
             }
         },
 
@@ -2051,6 +2059,8 @@
                     container.innerHTML = '<div class="plaza-comment-empty">评论加载中...</div>';
                     commentBtn.classList.add('active');
 
+                    // 展开时同时刷新该条互动数据（赞/评/投蕉数字），评论单独拉取
+                    this._injectFresh(amId);
                     const data = await api.fetchComments(amId);
                     container.innerHTML = renderer.renderComments(data, amId);
                     return;
