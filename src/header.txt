@@ -1,0 +1,18 @@
+// ==UserScript==
+// @name         AcFun 动态广场
+// @namespace    https://www.acfun.cn/
+// @version      3.2.5
+// @description  按am号查找动态，按时间排序显示，IndexedDB 预加载缓存
+// @author       name_xxl
+// @match        https://www.acfun.cn/member*
+// @downloadURL  https://raw.githubusercontent.com/name-xxl/acfun-moment-plaza/main/list/acfun-moment-plaza.user.js
+// @updateURL    https://raw.githubusercontent.com/name-xxl/acfun-moment-plaza/main/list/acfun-moment-plaza.user.js
+// @grant        GM_xmlhttpRequest
+// @grant        GM_addStyle
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @connect      www.acfun.cn
+// @connect      id.app.acfun.cn
+// @connect      kuaishouzt.com
+// @run-at       document-idle
+// ==/UserScript==

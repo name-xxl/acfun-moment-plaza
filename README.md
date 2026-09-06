@@ -2,16 +2,31 @@
 
 油猴脚本，在 AcFun 个人中心添加「动态广场」功能，按 am 号查找动态并瀑布流展示，用 IndexedDB 做预加载缓存。
 
+## 开发与构建
+
+源码按模块拆分在 `src/` 下（config / state / utils / css / db / api / renderer / background / navigation / controller / events / main），用 esbuild 打包成单文件油猴脚本：
+
+```bash
+nvm use 24 && npm install
+npm run build    # 产出 list/acfun-moment-plaza.user.js
+npm run watch    # 监听 src/ 变更自动重建
+```
+
+- `list/acfun-moment-plaza.user.js` 是构建产物，**勿手改**；安装/更新用这个文件。
+- 脚本头（`@version`、`@grant` 等）唯一来源是 `src/header.txt`，版本号在这里改。
+- 改功能请改 `src/` 下对应模块，然后重新 build。
+
 ## 功能特性
 
 - 按 am 号查找动态，向上/向下每次固定加载 20 条
 - IndexedDB 本地缓存：预渲染固定内容，赞/评/投蕉数字加载后注入
-- 向上后台定时爬取（按绝对时间戳判断落后程度）
-- 向下触底懒加载，持续爬到「发布 24 小时」的动态为止
+- 向上后台定时爬取，命中新动态或空手而归时按退避策略调整间隔
+- 向下触底懒加载，持续爬到「发布 >24 小时」的动态为止
 - 发布 ≤3 小时的动态互动数字显示加载动画并后台刷新，>3 小时直接用缓存
-- 粉丝可见动态默认跳过
+- 评论、回复评论支持表情面板与本地上传图片
 - 点赞、投蕉、评论、回复评论、评论点赞/取消赞
 - @提及、#话题#、ac号 自动转可点击链接
+- 转发动态渲染内容卡片（视频/文章/漫画：封面 + 标题 + 原作者，可点击跳转）
 - 数据库保留天数可调（1-7 天），超期自动清除
 
 ## 数据存储（IndexedDB）
@@ -28,7 +43,6 @@
   }
   ```
   另建有 `by_absTs` 索引，用于范围删除过期数据和查最新发布时间。
-- **store `meta`**：预留的元数据表。
 
 另有通过 `GM_setValue` 持久化的轻量配置（不存动态数据）：
 
@@ -39,12 +53,10 @@
 
 ## 绝对时间戳
 
-`moment/detail` 接口的 `createTime` 是相对字符串（如 `"13小时前"`），**不返回绝对时间**。
-
-脚本用「抓取时刻 − 相对时长」反推绝对时间戳，并在**首次抓取时固化**：
+`moment/detail` 接口的 `createTime` 在大多数情况下是相对字符串（如 `"13小时前"`），少数场景会返回标准时间。脚本会先尝试按标准时间解析，再回退到相对时长，统一用「抓取时刻 − 已发布时长」反推绝对时间戳，并在**首次抓取时固化**：
 
 ```javascript
-absTs = fetchedAt - parseRelativeMs(createTime)
+absTs = fetchedAt - parseAgeMs(createTime)
 ```
 
 展示时间时用 `absTs` 动态计算（避免缓存里的相对时间字符串过期失真）。
@@ -65,10 +77,11 @@ absTs = fetchedAt - parseRelativeMs(createTime)
 
 ### 向上（后台定时）
 
-- 定时器（`UP_POLL_INTERVAL`，默认 60s）检查数据库最新动态的 `absTs`。
-- 与当前时间差距 **>1 小时** 时，启动向上爬取（从 `last_am + 1` 逐个探测）。
+- 定时器（`UP_POLL_INTERVAL`，默认 60s）从 `last_am + 1` 向上探测新动态。
+- 命中新动态时把结果存库 + 更新 `last_am`，轮询间隔立即复位到 60s。
+- 空手而归时退避翻倍：60s → 120s → 240s → 480s → 封顶 10 分钟，减少夜间空探测。
 - 爬到「发布 ≤1 小时」的动态即停止（说明已够新），之后靠用户点击刷新展示最新。
-- 爬取结果存库 + 更新 `last_am`，**不自动插入当前列表**。
+- am 号存在空号断层，会话内记录已探测边界 `_upProbedTo`，断层分多次逐步跨过。
 
 ### 向下（触底触发）
 
@@ -78,7 +91,7 @@ absTs = fetchedAt - parseRelativeMs(createTime)
 
 ### 粉丝可见跳过
 
-`visibleForFans === true` 的动态在爬取时直接跳过，不存库、不展示、不影响空号计数。
+`visibleForFans === true` 的动态在爬取时直接跳过，不存库、不展示，但视为真实存在的动态（重置空号计数，避免连片粉丝可见被误判为空号断层）。
 
 ### 参数配置
 
@@ -90,8 +103,7 @@ CONFIG = {
     FRESH_WINDOW_MS: 3h,   // ≤3h 启用加载动画
     UP_STOP_AT_MS: 1h,     // 向上爬到 ≤1h 停
     DOWN_STOP_AFTER_MS: 24h, // 向下爬到 >24h 停
-    UP_POLL_INTERVAL: 60s, // 向上定时检查间隔
-    UP_POLL_GAP_MS: 1h,    // 落后 >1h 才向上爬
+    UP_POLL_INTERVAL: 60s, // 向上轮询基准间隔（空手而归翻倍，封顶 10 分钟）
     KEEP_DAYS_DEFAULT: 3,  // 默认保留天数
 }
 ```
@@ -252,6 +264,42 @@ GET https://www.acfun.cn/rest/pc-direct/comment/list?sourceId={amId}&sourceType=
 - `headUrl[0].url` 或 `userHeadImgInfo.thumbnailImageCdnUrl` 获取头像
 - 评论内容含 UBB 表情码 `[emot=acfun,2797/]`
 
+### 评论图片上传
+
+评论图片通过 kuaishouzt 网关分片上传，共 4 步：
+
+1. **获取 upload_token**
+   ```
+   POST https://www.acfun.cn/rest/pc-direct/image/upload/getToken
+   Content-Type: application/x-www-form-urlencoded
+
+   fileName=image.png
+   ```
+   响应：`{ result: 0, info: { token: "..." } }`
+
+2. **分片上传（每片 1MB）**
+   ```
+   POST https://upload.kuaishouzt.com/api/upload/fragment?upload_token={token}&fragment_id={i}
+   Content-Type: application/octet-stream
+   Content-Range: bytes {start}-{end}/{total}
+   ```
+   响应：`{ result: 1 }`
+
+3. **完成上传**
+   ```
+   POST https://upload.kuaishouzt.com/api/upload/complete?upload_token={token}&fragment_count={N}
+   ```
+   响应：`{ result: 1 }`
+
+4. **换取可访问 URL**
+   ```
+   POST https://www.acfun.cn/rest/pc-direct/image/upload/getUrlAfterUpload
+   Content-Type: application/x-www-form-urlencoded
+
+   token={token}&bizFlag=web-comment-text
+   ```
+   响应中的 `url` 带签名参数，**永久 URL 需去掉 query**，只保留 `https://preview.ndcsk.com/ksc2/...` 路径部分。
+
 ### 发评论
 
 ```
@@ -298,7 +346,8 @@ body: sourceId={am号}&sourceType=4&commentId={评论ID}
 | `ac12345` | `<a href="/a/ac12345">ac12345</a>` |
 | `v/ac12345` / `a/ac12345` | 对应链接 |
 | `m.acfun.cn/communityCircle/moment/123` | `www.acfun.cn/moment/am123` |
-| `[emot=acfun,1673/]` | `[表情]` 占位 |
+| `[emot=acfun,1673/]` | 有表情映射时为 `<img>`，无映射时显示 `[表情]` |
+| `[img=图片]https://...[/img]` | `<img src="https://...">` |
 
 ## 跨域配置
 
@@ -313,8 +362,6 @@ body: sourceId={am号}&sourceType=4&commentId={评论ID}
 
 ```
 @match        https://www.acfun.cn/member*
-@match        https://www.acfun.cn/moment/*
 ```
 
 - `/member*`：注入侧边栏 + 后台定时向上爬取
-- `/moment/*`：动态详情页（脚本也可运行）
