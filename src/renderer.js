@@ -287,6 +287,14 @@ export const renderer = {
         const isUp = comment.isUp;
         const isCommentLiked = comment.isLiked || false;
 
+        // 楼中楼回复前缀：回复 @被回复用户名 :
+        const replyToName = comment.replyToUserName || '';
+        const replyToId = comment.replyTo || 0;
+        let replyPrefix = '';
+        if (isSec && replyToName && replyToId) {
+            replyPrefix = `<span class="plaza-reply-prefix">回复 <a class="plaza-at-link" href="//www.acfun.cn/u/${replyToId}" target="_blank">@${utils.escapeHtml(replyToName)}</a> :</span>`;
+        }
+
         const subComments = comment.subComments || [];
         const subHtml = subComments.length > 0
             ? `<div class="area-comment-sec clearfix"><div class="area-sec-list">${subComments.map(s => this.renderComment(s, amId, true)).join('')}</div></div>`
@@ -311,7 +319,7 @@ export const renderer = {
                             <span class="time_times">${time}</span>
                         </div>
                         <div class="area-comment-des">
-                            <p class="area-comment-des-content">${content}</p>
+                            <p class="area-comment-des-content">${replyPrefix}${content}</p>
                         </div>
                         <div class="area-comment-tool">
                             <a class="area-comment-like${isCommentLiked ? ' area-comment-up' : ''}">${likeCount > 0 ? `赞 ${likeCount}` : '赞'}</a>

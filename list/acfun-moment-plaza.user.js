@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AcFun 动态广场
 // @namespace    https://www.acfun.cn/
-// @version      3.2.5
+// @version      3.2.6
 // @description  按am号查找动态，按时间排序显示，IndexedDB 预加载缓存
 // @author       name_xxl
 // @match        https://www.acfun.cn/member*
@@ -408,6 +408,10 @@
         }
         .moment-comments .area-comment-sec hr {
             display: none;
+        }
+        .plaza-reply-prefix {
+            color: #999;
+            font-size: 14px;
         }
         .moment-comments .plaza-up-tag {
             background: #fd4c5c;
@@ -1727,6 +1731,12 @@
       const device = comment.deviceModel || "";
       const isUp = comment.isUp;
       const isCommentLiked = comment.isLiked || false;
+      const replyToName = comment.replyToUserName || "";
+      const replyToId = comment.replyTo || 0;
+      let replyPrefix = "";
+      if (isSec && replyToName && replyToId) {
+        replyPrefix = `<span class="plaza-reply-prefix">回复 <a class="plaza-at-link" href="//www.acfun.cn/u/${replyToId}" target="_blank">@${utils.escapeHtml(replyToName)}</a> :</span>`;
+      }
       const subComments = comment.subComments || [];
       const subHtml = subComments.length > 0 ? `<div class="area-comment-sec clearfix"><div class="area-sec-list">${subComments.map((s) => this.renderComment(s, amId, true)).join("")}</div></div>` : "";
       const secClass = isSec ? " sec" : "";
@@ -1747,7 +1757,7 @@
                             <span class="time_times">${time}</span>
                         </div>
                         <div class="area-comment-des">
-                            <p class="area-comment-des-content">${content}</p>
+                            <p class="area-comment-des-content">${replyPrefix}${content}</p>
                         </div>
                         <div class="area-comment-tool">
                             <a class="area-comment-like${isCommentLiked ? " area-comment-up" : ""}">${likeCount > 0 ? `赞 ${likeCount}` : "赞"}</a>

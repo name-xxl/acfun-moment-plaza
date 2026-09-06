@@ -387,6 +387,10 @@ const styles = `
         .moment-comments .area-comment-sec hr {
             display: none;
         }
+        .plaza-reply-prefix {
+            color: #999;
+            font-size: 14px;
+        }
         .moment-comments .plaza-up-tag {
             background: #fd4c5c;
             color: #fff;
