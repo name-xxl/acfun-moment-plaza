@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AcFun 动态广场
 // @namespace    https://www.acfun.cn/
-// @version      3.2.8
+// @version      3.2.9
 // @description  按am号查找动态，按时间排序显示，IndexedDB 预加载缓存
 // @author       name_xxl
 // @match        https://www.acfun.cn/member*

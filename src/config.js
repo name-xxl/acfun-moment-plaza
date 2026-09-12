@@ -26,11 +26,15 @@ export const CONFIG = {
     TOAST_DURATION_MS: 1500,            // 分享复制成功提示时长
     COMMENT_PAGE_SIZE: 10,              // 评论列表每页条数
     UP_CRAWL_TARGET: 50,                // 向上后台爬取的目标条数
-    FF_INITIAL_STEP: 50000,             // 指数跳跃初始步长
-    FF_STEP_MULTIPLIER: 5,              // 指数跳跃倍率
-    FF_PROBE_SIZE: 5,                   // 每个探针位置采样的 ID 数量
-    FF_MAX_PROBES: 8,                   // 最大跳跃次数
     FF_STALE_THRESHOLD_MS: 2 * 3600 * 1000, // 数据超过此时间视为旧，触发快速定位
+    FF_PROBE_SPAN_MS: 10 * 60 * 1000,   // 探针采样宽度覆盖的时间跨度（按速率换算成 ID 数）
+    FF_PROBE_SIZE: 5,                   // 探针最少采样的连续 am 号数（速率未知时）
+    FF_PROBE_MAX: 30,                   // 探针最多采样的连续 am 号数
+    FF_CONVERGE_GAP: 20,                // 上下界收敛到此间隔即停止，交给逐号补抓
+    FF_MAX_PROBES: 24,                  // 最大探针轮数
+    FF_INITIAL_STEP: 2000,              // 速率未知时的盲跳初始步长
+    FF_STEP_MULTIPLIER: 4,              // 盲跳命中后的步长倍率
+    FF_MIN_STEP: 50,                    // 盲跳落空则减半，低于此值即认定越过边界
     KEEP_DAYS_OPTIONS: [1, 2, 3, 4, 5, 6, 7], // 保留天数可选项
     UPLOAD_CHUNK_SIZE: 1 * 1024 * 1024, // 评论图片上传分片大小（与原生一致 1M）
     MAX_IMAGE_SIZE: 5 * 1024 * 1024,    // 评论图片大小上限（原生提示 5M）

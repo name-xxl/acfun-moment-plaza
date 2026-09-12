@@ -53,80 +53,153 @@ export const background = {
         state._upProbedTo = 0;
     },
 
-    // 指数跳跃快速定位最新动态：从 last_am 起按指数步长跳跃探测
-    // 每步采样 FF_PROBE_SIZE 个 ID 避免空号误判；找到 ≤1h 的动态即返回
-    // 全部跳完仍未找到 → 从最后命中位置回退到普通逐号爬取
+    // 快速定位最新动态：按「时间 → am 号」外推，而非盲跳固定步长
+    // 用本地已有记录的号差/时间差测出增长速率，直接跳到「此刻」对应的 am 号附近；
+    // 越过边界（整段空号）则在已知区间内收敛，命中旧数据则用新锚点修正速率继续外推
     async _fastForward(onStatus) {
         const startId = state.latestAmId;
         if (!startId || startId <= 0) return [];
 
-        let step = CONFIG.FF_INITIAL_STEP;
-        let lastFoundId = startId;
-        let emptyProbes = 0;
+        const { lo, best } = await this._locateFrontier(startId, onStatus);
 
-        for (let probe = 0; probe < CONFIG.FF_MAX_PROBES; probe++) {
-            const probeId = startId + step;
-            if (onStatus) onStatus(`快速定位... 探测 am${probeId}`);
-
-            const ids = [];
-            for (let i = 0; i < CONFIG.FF_PROBE_SIZE; i++) ids.push(probeId + i);
-
-            const results = await Promise.all(ids.map(id => api.fetchMoment(id)));
-            let probeNewest = 0;
-            let probeHasData = false;
-
-            for (let i = 0; i < results.length; i++) {
-                const data = results[i];
-                if (!data || data.result !== 0 || !data.moment) continue;
-                if (data.moment.visibleForFans) continue;
-                probeHasData = true;
-                const ageMs = utils.parseAgeMs(data.moment.createTime);
-                if (ageMs <= CONFIG.UP_STOP_AT_MS) {
-                    const records = await this._storeMoments([{ ...data, _amId: ids[i] }]);
-                    if (records.length) {
-                        const maxAm = Math.max(...records.map(r => r.amId));
-                        if (maxAm > state.latestAmId) {
-                            state.latestAmId = maxAm;
-                            utils.setLastAmId(maxAm);
-                        }
-                        utils.setLastDiscoveryAt(Date.now());
-                        utils.log(`快速定位成功: am${maxAm}`);
-                        return records;
-                    }
-                }
-                if (ageMs > probeNewest) probeNewest = ageMs;
+        let moments;
+        if (best) {
+            // 已定位到边界 → 从边界向下收一批，保证列表里有足够多的新动态
+            if (onStatus) onStatus(`快速定位... 从 am${lo} 抓取最新一批`);
+            moments = (await api.crawlMoments(lo + 1, CONFIG.UP_CRAWL_TARGET, {
+                direction: 'down',
+                skipFansOnly: true
+            })).moments;
+            if (!moments.some(m => m._amId === best.amId)) {
+                moments.push({ ...best.raw, _amId: best.amId });
             }
-
-            if (probeHasData) {
-                lastFoundId = probeId + CONFIG.FF_PROBE_SIZE - 1;
-                emptyProbes = 0;
-            } else {
-                emptyProbes++;
-                if (emptyProbes >= 3 && lastFoundId > startId) break;
-            }
-
-            step *= CONFIG.FF_STEP_MULTIPLIER;
-            await new Promise(r => setTimeout(r, CONFIG.CRAWL_BATCH_DELAY_MS));
+        } else {
+            // 全程没探到任何动态 → 回退到逐号向上爬取
+            if (onStatus) onStatus(`快速定位... 从 am${startId} 逐号查找`);
+            moments = (await api.crawlMoments(startId, CONFIG.UP_CRAWL_TARGET, {
+                direction: 'up',
+                skipFansOnly: true,
+                stopMs: CONFIG.UP_STOP_AT_MS
+            })).moments;
         }
-
-        // 未找到新鲜动态 → 从最后命中位置回退到普通爬取
-        const crawlFrom = lastFoundId > startId ? lastFoundId : startId;
-        if (onStatus) onStatus(`快速定位... 从 am${crawlFrom} 逐号查找`);
-        const { moments } = await api.crawlMoments(crawlFrom, CONFIG.UP_CRAWL_TARGET, {
-            direction: 'up',
-            skipFansOnly: true,
-            stopMs: CONFIG.UP_STOP_AT_MS
-        });
+        await wait();
 
         if (!moments.length) return [];
         const records = await this._storeMoments(moments);
-        const maxAm = Math.max(...records.map(r => r.amId));
-        if (maxAm > state.latestAmId) {
-            state.latestAmId = maxAm;
-            utils.setLastAmId(maxAm);
+        const frontier = best ? lo : Math.max(...records.map(r => r.amId));
+        if (frontier > state.latestAmId) {
+            state.latestAmId = frontier;
+            utils.setLastAmId(frontier);
         }
         utils.setLastDiscoveryAt(Date.now());
+        utils.log(`快速定位: 边界 am${frontier}，入库 ${records.length} 条`);
         return records;
+    },
+
+    // 探测收敛出边界：返回 lo（已确认存在动态的最高 am 号）与 best（该处动态原始数据）
+    async _locateFrontier(startId, onStatus) {
+        let anchor = this._newestAnchor();       // 时间锚点 { id, ageMs }
+        let rate = this._estimateIdRate();       // am 号 / 毫秒
+        let lo = anchor ? Math.max(startId, anchor.id) : startId;
+        let hi = 0;                              // 已确认越界（整段空号）的最低 am 号
+        let step = CONFIG.FF_INITIAL_STEP;
+        let best = null;
+
+        for (let round = 0; round < CONFIG.FF_MAX_PROBES; round++) {
+            if (hi && hi - lo <= CONFIG.FF_CONVERGE_GAP) break;
+
+            let target;
+            if (hi) {
+                // 已有上界：外推落在区间内就用外推，否则二分
+                target = rate > 0 && anchor ? Math.round(anchor.id + anchor.ageMs * rate) : 0;
+                if (!(target > lo && target < hi)) target = Math.round((lo + hi) / 2);
+            } else if (anchor && rate > 0) {
+                target = Math.round(anchor.id + anchor.ageMs * rate);
+                if (target <= lo) target = lo + step;
+            } else {
+                target = lo + step;
+            }
+
+            if (onStatus) onStatus(`快速定位... 探测 am${target}`);
+            const hit = await this._probeWindow(target, this._probeSize(rate));
+            await new Promise(r => setTimeout(r, CONFIG.CRAWL_BATCH_DELAY_MS));
+
+            if (!hit) {
+                // 采样宽度已按速率校准 → 整段空号即视为越界；无速率时先怀疑是空号断层，缩短步长重试
+                if (rate > 0 || hi) {
+                    hi = target;
+                } else {
+                    step = Math.round(step / 2);
+                    if (step < CONFIG.FF_MIN_STEP) hi = target;
+                }
+                continue;
+            }
+
+            if (hit.amId > lo) lo = hit.amId;
+            if (!best || hit.ageMs < best.ageMs) best = hit;
+            if (hit.ageMs <= CONFIG.UP_STOP_AT_MS) break;
+
+            // 用新旧两个锚点修正速率，越靠近现在越准
+            if (anchor && hit.amId > anchor.id && anchor.ageMs > hit.ageMs) {
+                rate = (hit.amId - anchor.id) / (anchor.ageMs - hit.ageMs);
+            }
+            anchor = { id: hit.amId, ageMs: hit.ageMs };
+            if (rate <= 0) step *= CONFIG.FF_STEP_MULTIPLIER;
+        }
+
+        // 收敛阈值内可能还夹着几条 → 一次补扫 (lo, hi) 把边界定准
+        if (best && hi && hi - lo > 1) {
+            const rest = await this._probeWindow(lo + 1, Math.min(hi - lo - 1, CONFIG.FF_PROBE_MAX));
+            if (rest && rest.amId > lo) {
+                lo = rest.amId;
+                if (rest.ageMs < best.ageMs) best = rest;
+            }
+        }
+
+        return { lo, best };
+    },
+
+    // 采样一段连续 am 号，返回其中最新的公开动态；整段为空返回 null
+    async _probeWindow(fromId, size) {
+        const ids = [];
+        for (let i = 0; i < size; i++) ids.push(fromId + i);
+        const results = await Promise.all(ids.map(id => api.fetchMoment(id)));
+        let best = null;
+        for (let i = 0; i < results.length; i++) {
+            const data = results[i];
+            if (!data || data.result !== 0 || !data.moment) continue;
+            if (data.moment.visibleForFans) continue;
+            const ageMs = utils.parseAgeMs(data.moment.createTime);
+            if (!best || ageMs < best.ageMs) best = { amId: ids[i], ageMs, raw: data };
+        }
+        return best;
+    },
+
+    // 采样宽度按速率换算成能覆盖 FF_PROBE_SPAN_MS 的 ID 数，速率未知时用最小宽度
+    _probeSize(rate) {
+        if (!(rate > 0)) return CONFIG.FF_PROBE_SIZE;
+        const n = Math.ceil(rate * CONFIG.FF_PROBE_SPAN_MS);
+        return Math.min(CONFIG.FF_PROBE_MAX, Math.max(CONFIG.FF_PROBE_SIZE, n));
+    },
+
+    // 本地最新动态作为时间锚点（am 号 → 距今毫秒）
+    _newestAnchor() {
+        for (const m of state.moments) {
+            if (m.absTs) return { id: m.amId, ageMs: Math.max(1, Date.now() - m.absTs) };
+        }
+        return null;
+    },
+
+    // 由本地记录估算 am 号增长速率：最新与最旧两条的号差 ÷ 时间差
+    _estimateIdRate() {
+        const ms = state.moments;
+        if (ms.length < 2) return 0;
+        const newest = ms[0];
+        const oldest = ms[ms.length - 1];
+        const dId = newest.amId - oldest.amId;
+        const dTs = newest.absTs - oldest.absTs;
+        if (!(dId > 0) || !(dTs > 0)) return 0;
+        return dId / dTs;
     },
 
     _upPollTick() {
