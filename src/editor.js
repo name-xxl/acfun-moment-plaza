@@ -1,13 +1,13 @@
 import { utils } from './utils.js';
 
-export const EDITOR_CLASS = 'plaza-comment-editor';
-export const EDITOR_INPUT_CLASS = 'plaza-editor-input';
-export const EDITOR_EMOT_BTN_CLASS = 'plaza-editor-emot';
-export const EDITOR_IMG_BTN_CLASS = 'plaza-editor-img';
-export const EDITOR_FILE_CLASS = 'plaza-editor-file';
-export const EDITOR_SEND_CLASS = 'plaza-editor-send';
-export const EDITOR_PENDING_CLASS = 'plaza-editor-pending';
-export const EDITOR_PANEL_CLASS = 'plaza-emot-panel';
+const EDITOR_CLASS = 'plaza-comment-editor';
+const EDITOR_INPUT_CLASS = 'plaza-editor-input';
+const EDITOR_EMOT_BTN_CLASS = 'plaza-editor-emot';
+const EDITOR_IMG_BTN_CLASS = 'plaza-editor-img';
+const EDITOR_FILE_CLASS = 'plaza-editor-file';
+const EDITOR_SEND_CLASS = 'plaza-editor-send';
+const EDITOR_PENDING_CLASS = 'plaza-editor-pending';
+const EDITOR_PANEL_CLASS = 'plaza-emot-panel';
 
 export const editor = {
     renderEditor(amId, opts = {}) {

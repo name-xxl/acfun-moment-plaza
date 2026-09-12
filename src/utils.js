@@ -1,4 +1,4 @@
-import { CONFIG, LAST_AM_KEY, KEEP_DAYS_KEY } from './config.js';
+import { CONFIG, LAST_AM_KEY, KEEP_DAYS_KEY, LAST_DISCOVERY_KEY } from './config.js';
 import { state } from './state.js';
 
 export const utils = {
@@ -96,7 +96,7 @@ export const utils = {
                 : '<span style="color:#999;font-size:12px;">[表情]</span>';
         });
         // 非 acfun 主包的老表情走 umeditor 静态路径（与原生 fallback 一致）
-        html = html.replace(/\[emot=(?!acfun,)(\w+),(\d+)\/?\]/g, '<img class="ubb-emotion" src="//cdn.aixifan.com/dotnet/20130418/umeditor/dialogs/emotion/images/$1/$2.gif">');
+        html = html.replace(/\[emot=(\w+),(\d+)\/?\]/g, '<img class="ubb-emotion" src="//cdn.aixifan.com/dotnet/20130418/umeditor/dialogs/emotion/images/$1/$2.gif">');
         // UBB 图片要在链接规则之前处理，避免 URL 里的字符被当作 ac 号/话题改写
         // 兼容 [img=图片] 和无属性 [img] 两种写法
         html = html.replace(/\[img(?:=[^\]]*)?\](https?:\/\/[^[\s]+?)\[\/img\]/gi, (_, url) => {
@@ -143,5 +143,13 @@ export const utils = {
 
     setKeepDays(days) {
         try { GM_setValue(KEEP_DAYS_KEY, Math.min(7, Math.max(1, days || CONFIG.KEEP_DAYS_DEFAULT))); } catch (e) {}
+    },
+
+    getLastDiscoveryAt() {
+        try { return parseInt(GM_getValue(LAST_DISCOVERY_KEY, 0)) || 0; } catch { return 0; }
+    },
+
+    setLastDiscoveryAt(ts) {
+        try { GM_setValue(LAST_DISCOVERY_KEY, ts); } catch (e) {}
     }
 };

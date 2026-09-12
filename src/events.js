@@ -49,6 +49,8 @@ export const events = {
                 document.querySelectorAll('.plaza-emot-panel').forEach(p => { p.style.display = 'none'; });
             }
 
+            if (!e.target.closest('.moment-plaza-container, .plaza-promotion')) return;
+
             // 表情按钮 → 开关面板
             const emotBtn = e.target.closest('.plaza-editor-emot');
             if (emotBtn) {
@@ -238,7 +240,7 @@ export const events = {
                 commentBtn.classList.add('active');
 
                 // 展开时同时刷新该条互动数据（赞/评/投蕉数字），评论单独拉取
-                controller._injectFresh(amId);
+                controller._refreshOneMoment(amId).catch(() => {});
                 const data = await api.fetchComments(amId);
                 container.innerHTML = renderer.renderComments(data, amId);
                 return;

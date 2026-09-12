@@ -34,6 +34,7 @@ export const CONFIG = {
 export const LAST_AM_KEY = 'moment_plaza_last_am';
 export const KEEP_DAYS_KEY = 'moment_plaza_keep_days';
 export const AUTO_ENTER_KEY = 'moment_plaza_auto_enter';
+export const LAST_DISCOVERY_KEY = 'moment_plaza_last_discovery';
 
 export const SEL_MAIN_FEEDS = '.ac-member-main .ac-member-feeds';
 

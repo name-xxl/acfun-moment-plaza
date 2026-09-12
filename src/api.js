@@ -110,9 +110,9 @@ export const api = {
                         }
                         _applyEmoticons(flat);
                         resolve(true);
-                    } catch (e) { resolve(false); }
+                    } catch (e) { _emoticonPromise = null; resolve(false); }
                 },
-                onerror: () => resolve(false)
+                onerror: () => { _emoticonPromise = null; resolve(false); }
             });
         });
         return _emoticonPromise;

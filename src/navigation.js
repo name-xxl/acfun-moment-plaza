@@ -73,6 +73,7 @@ export const navigation = {
                     controller.enterPlaza();
                 }
             }, CONFIG.FEEDS_POLL_INTERVAL);
+            setTimeout(() => clearInterval(waitForContent), CONFIG.NAV_POLL_TIMEOUT);
             return;
         }
 

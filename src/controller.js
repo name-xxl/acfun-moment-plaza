@@ -32,6 +32,7 @@ export const controller = {
     // 刷新广场（点击刷新时调用）：预渲染 DB 最新 20 条
     async refreshPlaza() {
         background._stopUpwardPoll();
+        background._cancelRunningSearch();
 
         const statusEl = document.getElementById('fetch-status');
         const updateStatus = (t) => { if (statusEl) statusEl.textContent = t; };
@@ -162,47 +163,13 @@ export const controller = {
         const allIds = [...new Set([...repairIds, ...freshIds])];
         if (!allIds.length) return;
 
-        await Promise.all(allIds.map(async (amId) => {
-            const data = await api.fetchMoment(amId);
-            if (!data || data.result !== 0 || !data.moment) return;
-            const moment = data.moment;
-
-            const record = state.moments.find(m => m.amId == amId);
-            const absTs = record?.absTs || utils.computeAbsTs(moment.createTime, now);
-            await db.putMoment({ amId, absTs, data: moment, fetchedAt: now });
-            if (record) record.data = moment;
-
-            // 修复转发卡片
-            if (repairIds.has(amId)) {
-                const card = document.querySelector(`.moment-plaza-item[data-am-id="${amId}"]`);
-                if (card) {
-                    const pending = !!absTs && (now - absTs) <= CONFIG.FRESH_WINDOW_MS;
-                    const holder = document.createElement('div');
-                    holder.innerHTML = renderer.renderCard(record || { amId, absTs, data: moment }, { pending });
-                    const fresh = holder.firstElementChild;
-                    if (fresh) card.replaceWith(fresh);
-                }
-            }
-
-            // 注入最新互动数字
-            if (freshIds.has(amId)) {
-                const card = document.querySelector(`.moment-plaza-item[data-am-id="${amId}"]`);
-                const interactiveEl = card?.querySelector('.member-feed-interactive');
-                if (interactiveEl) {
-                    interactiveEl.innerHTML = renderer.fillInteractive(moment, { pending: false });
-                    const commentContainer = document.getElementById(`comments-${amId}`);
-                    if (commentContainer && commentContainer.style.display !== 'none') {
-                        const btn = interactiveEl.querySelector('.feed-interactive-comment');
-                        if (btn) btn.classList.add('active');
-                    }
-                }
-            }
-        }));
+        await Promise.all(allIds.map(amId =>
+            this._refreshOneMoment(amId, { repair: repairIds.has(amId) })
+        ));
     },
 
-    async _injectFresh(amId) {
-        amId = parseInt(amId);
-        if (!amId) return;
+    // 单条动态补抓：更新数据 → 刷新互动数字 → 可选重渲染卡片（修复转发源）
+    async _refreshOneMoment(amId, opts = {}) {
         const data = await api.fetchMoment(amId);
         if (!data || data.result !== 0 || !data.moment) return;
         const moment = data.moment;
@@ -213,14 +180,23 @@ export const controller = {
         if (record) record.data = moment;
 
         const card = document.querySelector(`.moment-plaza-item[data-am-id="${amId}"]`);
-        const interactiveEl = card?.querySelector('.member-feed-interactive');
-        if (interactiveEl) {
-            interactiveEl.innerHTML = renderer.fillInteractive(moment, { pending: false });
-            // 若评论区已展开，恢复评论按钮高亮（替换 HTML 会冲掉 active）
-            const commentContainer = document.getElementById(`comments-${amId}`);
-            if (commentContainer && commentContainer.style.display !== 'none') {
-                const btn = interactiveEl.querySelector('.feed-interactive-comment');
-                if (btn) btn.classList.add('active');
+        if (!card) return;
+
+        if (opts.repair) {
+            const pending = !!absTs && (Date.now() - absTs) <= CONFIG.FRESH_WINDOW_MS;
+            const holder = document.createElement('div');
+            holder.innerHTML = renderer.renderCard(record || { amId, absTs, data: moment }, { pending });
+            const fresh = holder.firstElementChild;
+            if (fresh) card.replaceWith(fresh);
+        } else {
+            const interactiveEl = card.querySelector('.member-feed-interactive');
+            if (interactiveEl) {
+                interactiveEl.innerHTML = renderer.fillInteractive(moment, { pending: false });
+                const commentContainer = document.getElementById(`comments-${amId}`);
+                if (commentContainer && commentContainer.style.display !== 'none') {
+                    const btn = interactiveEl.querySelector('.feed-interactive-comment');
+                    if (btn) btn.classList.add('active');
+                }
             }
         }
     },

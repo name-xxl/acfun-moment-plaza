@@ -11,8 +11,26 @@ export const background = {
         if (!knownAmId || knownAmId <= 0) return;
 
         state.latestAmId = knownAmId;
+
+        const lastDiscovery = utils.getLastDiscoveryAt();
+        if (lastDiscovery) {
+            const idleMs = Date.now() - lastDiscovery;
+            state._upBackoffMs = this._computeBackoff(idleMs);
+            state._upNextAt = Date.now() + state._upBackoffMs;
+        }
+
         this._startUpwardPoll();
         this.cleanupExpired();
+    },
+
+    _computeBackoff(idleMs) {
+        const min = CONFIG.UP_POLL_INTERVAL;
+        const max = CONFIG.UP_POLL_BACKOFF_MAX_MS;
+        if (idleMs < 5 * 60 * 1000) return min;
+        if (idleMs < 30 * 60 * 1000) return Math.min(min * 2, max);
+        if (idleMs < 2 * 3600 * 1000) return Math.min(min * 4, max);
+        if (idleMs < 6 * 3600 * 1000) return Math.min(min * 8, max);
+        return max;
     },
 
     // ========== 向上爬取（后台定时，空手退避 + 跨空号断层） ==========
@@ -29,6 +47,12 @@ export const background = {
         }
     },
 
+    _cancelRunningSearch() {
+        state._upGeneration++;
+        state._upRunning = false;
+        state._upProbedTo = 0;
+    },
+
     _upPollTick() {
         if (state._upRunning) return;
         if (Date.now() < state._upNextAt) return;
@@ -38,21 +62,31 @@ export const background = {
     async _runUpwardSearch() {
         if (state._upRunning) return;
         state._upRunning = true;
+        const gen = state._upGeneration;
 
-        const upStatus = document.getElementById('up-status');
-        const updateUp = (t) => { if (upStatus) upStatus.textContent = t; };
+        const updateUp = (t) => {
+            const el = document.getElementById('up-status');
+            if (el) el.textContent = t;
+        };
         updateUp('↑查找新动态...');
 
         try {
             // am 号不连续：连续空号（断层）会截断单次爬取。从「已探测边界」继续探，
-            // 断层分多次爬取逐步跨过，跨过后不再重复探测（会话内记忆，页面刷新后重探一次）
+            // 断层分多次爬取逐步跨过。_upProbedTo 仅用于会话内避免重复探测同一段空号，
+            // 不持久化：页面刷新后从 latestAmId 重新出发，避免跳过刷新期间填入空段的新动态。
             const fromId = Math.max(state.latestAmId, state._upProbedTo);
             const { moments: newMoments, probedTo } = await api.crawlMoments(fromId, CONFIG.UP_CRAWL_TARGET, {
                 direction: 'up',
                 skipFansOnly: true,
                 stopMs: CONFIG.UP_STOP_AT_MS
             });
-            if (probedTo > state._upProbedTo) state._upProbedTo = probedTo;
+
+            // 搜索期间被 refresh 打断 → 丢弃结果，不写状态
+            if (gen !== state._upGeneration) return;
+
+            if (probedTo > state._upProbedTo) {
+                state._upProbedTo = probedTo;
+            }
 
             if (newMoments.length) {
                 const records = await this._storeMoments(newMoments);
@@ -62,19 +96,21 @@ export const background = {
                     utils.setLastAmId(maxAm);
                 }
                 updateUp(`↑发现 ${records.length} 条新动态，点击刷新`);
+                const now = Date.now();
+                utils.setLastDiscoveryAt(now);
                 state._upBackoffMs = 0;
                 state._upNextAt = 0;
             } else {
                 updateUp('');
-                // 空手而归 → 下次间隔翻倍（封顶），减少夜间空探测；命中新动态即恢复正常节奏
-                state._upBackoffMs = Math.min(
-                    (state._upBackoffMs || CONFIG.UP_POLL_INTERVAL) * 2,
-                    CONFIG.UP_POLL_BACKOFF_MAX_MS
-                );
+                const lastDisc = utils.getLastDiscoveryAt();
+                const idleMs = lastDisc ? Date.now() - lastDisc : 0;
+                state._upBackoffMs = this._computeBackoff(idleMs);
                 state._upNextAt = Date.now() + state._upBackoffMs;
             }
         } finally {
-            state._upRunning = false;
+            if (gen === state._upGeneration) {
+                state._upRunning = false;
+            }
         }
     },
 

@@ -217,12 +217,13 @@ export const renderer = {
         const images = moment.imgs || [];
         let imageHtml = '';
         if (images.length > 0) {
-            const imgCount = Math.min(images.length, CONFIG.MAX_IMAGES);
             const imgTags = images.slice(0, CONFIG.MAX_IMAGES).map(img => {
                 const url = img.url || img.originUrl || '';
                 return url ? `<img src="${utils.attrEscape(url)}">` : '';
-            }).filter(Boolean).join('');
-            imageHtml = `<div class="member-feed-moment-image member-feed-moment-image-${imgCount}">${imgTags}</div>`;
+            }).filter(Boolean);
+            if (imgTags.length > 0) {
+                imageHtml = `<div class="member-feed-moment-image member-feed-moment-image-${imgTags.length}">${imgTags.join('')}</div>`;
+            }
         }
 
         const amId = record.amId || moment.momentId;
