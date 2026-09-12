@@ -26,6 +26,11 @@ export const CONFIG = {
     TOAST_DURATION_MS: 1500,            // 分享复制成功提示时长
     COMMENT_PAGE_SIZE: 10,              // 评论列表每页条数
     UP_CRAWL_TARGET: 50,                // 向上后台爬取的目标条数
+    FF_INITIAL_STEP: 50000,             // 指数跳跃初始步长
+    FF_STEP_MULTIPLIER: 5,              // 指数跳跃倍率
+    FF_PROBE_SIZE: 5,                   // 每个探针位置采样的 ID 数量
+    FF_MAX_PROBES: 8,                   // 最大跳跃次数
+    FF_STALE_THRESHOLD_MS: 2 * 3600 * 1000, // 数据超过此时间视为旧，触发快速定位
     KEEP_DAYS_OPTIONS: [1, 2, 3, 4, 5, 6, 7], // 保留天数可选项
     UPLOAD_CHUNK_SIZE: 1 * 1024 * 1024, // 评论图片上传分片大小（与原生一致 1M）
     MAX_IMAGE_SIZE: 5 * 1024 * 1024,    // 评论图片大小上限（原生提示 5M）

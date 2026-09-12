@@ -45,6 +45,19 @@ export const controller = {
 
         await this._loadAndRender(state.latestAmId + 1);
 
+        // 数据较旧 → 指数跳跃快速定位最新动态
+        const newestTs = state.moments[0]?.absTs;
+        if (!newestTs || (Date.now() - newestTs) > CONFIG.FF_STALE_THRESHOLD_MS) {
+            updateStatus('数据较旧，快速定位最新动态...');
+            const ffRecords = await background._fastForward(
+                (t) => { if (upStatus) upStatus.textContent = t; }
+            );
+            if (ffRecords.length) {
+                await this._loadAndRender(state.latestAmId + 1);
+            }
+            if (upStatus) upStatus.textContent = '';
+        }
+
         background._startUpwardPoll();
         background.cleanupExpired();
     },

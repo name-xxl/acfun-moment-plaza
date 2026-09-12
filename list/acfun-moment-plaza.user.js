@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AcFun 动态广场
 // @namespace    https://www.acfun.cn/
-// @version      3.2.7
+// @version      3.2.8
 // @description  按am号查找动态，按时间排序显示，IndexedDB 预加载缓存
 // @author       name_xxl
 // @match        https://www.acfun.cn/member*
@@ -820,6 +820,16 @@
     // 评论列表每页条数
     UP_CRAWL_TARGET: 50,
     // 向上后台爬取的目标条数
+    FF_INITIAL_STEP: 5e4,
+    // 指数跳跃初始步长
+    FF_STEP_MULTIPLIER: 5,
+    // 指数跳跃倍率
+    FF_PROBE_SIZE: 5,
+    // 每个探针位置采样的 ID 数量
+    FF_MAX_PROBES: 8,
+    // 最大跳跃次数
+    FF_STALE_THRESHOLD_MS: 2 * 3600 * 1e3,
+    // 数据超过此时间视为旧，触发快速定位
     KEEP_DAYS_OPTIONS: [1, 2, 3, 4, 5, 6, 7],
     // 保留天数可选项
     UPLOAD_CHUNK_SIZE: 1 * 1024 * 1024,
@@ -1884,6 +1894,71 @@
       state._upRunning = false;
       state._upProbedTo = 0;
     },
+    // 指数跳跃快速定位最新动态：从 last_am 起按指数步长跳跃探测
+    // 每步采样 FF_PROBE_SIZE 个 ID 避免空号误判；找到 ≤1h 的动态即返回
+    // 全部跳完仍未找到 → 从最后命中位置回退到普通逐号爬取
+    async _fastForward(onStatus) {
+      const startId = state.latestAmId;
+      if (!startId || startId <= 0) return [];
+      let step = CONFIG.FF_INITIAL_STEP;
+      let lastFoundId = startId;
+      let emptyProbes = 0;
+      for (let probe = 0; probe < CONFIG.FF_MAX_PROBES; probe++) {
+        const probeId = startId + step;
+        if (onStatus) onStatus(`快速定位... 探测 am${probeId}`);
+        const ids = [];
+        for (let i = 0; i < CONFIG.FF_PROBE_SIZE; i++) ids.push(probeId + i);
+        const results = await Promise.all(ids.map((id) => api.fetchMoment(id)));
+        let probeNewest = 0;
+        let probeHasData = false;
+        for (let i = 0; i < results.length; i++) {
+          const data = results[i];
+          if (!data || data.result !== 0 || !data.moment) continue;
+          if (data.moment.visibleForFans) continue;
+          probeHasData = true;
+          const ageMs = utils.parseAgeMs(data.moment.createTime);
+          if (ageMs <= CONFIG.UP_STOP_AT_MS) {
+            const records2 = await this._storeMoments([{ ...data, _amId: ids[i] }]);
+            if (records2.length) {
+              const maxAm2 = Math.max(...records2.map((r) => r.amId));
+              if (maxAm2 > state.latestAmId) {
+                state.latestAmId = maxAm2;
+                utils.setLastAmId(maxAm2);
+              }
+              utils.setLastDiscoveryAt(Date.now());
+              utils.log(`快速定位成功: am${maxAm2}`);
+              return records2;
+            }
+          }
+          if (ageMs > probeNewest) probeNewest = ageMs;
+        }
+        if (probeHasData) {
+          lastFoundId = probeId + CONFIG.FF_PROBE_SIZE - 1;
+          emptyProbes = 0;
+        } else {
+          emptyProbes++;
+          if (emptyProbes >= 3 && lastFoundId > startId) break;
+        }
+        step *= CONFIG.FF_STEP_MULTIPLIER;
+        await new Promise((r) => setTimeout(r, CONFIG.CRAWL_BATCH_DELAY_MS));
+      }
+      const crawlFrom = lastFoundId > startId ? lastFoundId : startId;
+      if (onStatus) onStatus(`快速定位... 从 am${crawlFrom} 逐号查找`);
+      const { moments } = await api.crawlMoments(crawlFrom, CONFIG.UP_CRAWL_TARGET, {
+        direction: "up",
+        skipFansOnly: true,
+        stopMs: CONFIG.UP_STOP_AT_MS
+      });
+      if (!moments.length) return [];
+      const records = await this._storeMoments(moments);
+      const maxAm = Math.max(...records.map((r) => r.amId));
+      if (maxAm > state.latestAmId) {
+        state.latestAmId = maxAm;
+        utils.setLastAmId(maxAm);
+      }
+      utils.setLastDiscoveryAt(Date.now());
+      return records;
+    },
     _upPollTick() {
       if (state._upRunning) return;
       if (Date.now() < state._upNextAt) return;
@@ -1995,6 +2070,19 @@
       state._downLoading = false;
       state._noMoreDown = false;
       await this._loadAndRender(state.latestAmId + 1);
+      const newestTs = state.moments[0]?.absTs;
+      if (!newestTs || Date.now() - newestTs > CONFIG.FF_STALE_THRESHOLD_MS) {
+        updateStatus("数据较旧，快速定位最新动态...");
+        const ffRecords = await background._fastForward(
+          (t) => {
+            if (upStatus) upStatus.textContent = t;
+          }
+        );
+        if (ffRecords.length) {
+          await this._loadAndRender(state.latestAmId + 1);
+        }
+        if (upStatus) upStatus.textContent = "";
+      }
       background._startUpwardPoll();
       background.cleanupExpired();
     },

@@ -53,6 +53,82 @@ export const background = {
         state._upProbedTo = 0;
     },
 
+    // 指数跳跃快速定位最新动态：从 last_am 起按指数步长跳跃探测
+    // 每步采样 FF_PROBE_SIZE 个 ID 避免空号误判；找到 ≤1h 的动态即返回
+    // 全部跳完仍未找到 → 从最后命中位置回退到普通逐号爬取
+    async _fastForward(onStatus) {
+        const startId = state.latestAmId;
+        if (!startId || startId <= 0) return [];
+
+        let step = CONFIG.FF_INITIAL_STEP;
+        let lastFoundId = startId;
+        let emptyProbes = 0;
+
+        for (let probe = 0; probe < CONFIG.FF_MAX_PROBES; probe++) {
+            const probeId = startId + step;
+            if (onStatus) onStatus(`快速定位... 探测 am${probeId}`);
+
+            const ids = [];
+            for (let i = 0; i < CONFIG.FF_PROBE_SIZE; i++) ids.push(probeId + i);
+
+            const results = await Promise.all(ids.map(id => api.fetchMoment(id)));
+            let probeNewest = 0;
+            let probeHasData = false;
+
+            for (let i = 0; i < results.length; i++) {
+                const data = results[i];
+                if (!data || data.result !== 0 || !data.moment) continue;
+                if (data.moment.visibleForFans) continue;
+                probeHasData = true;
+                const ageMs = utils.parseAgeMs(data.moment.createTime);
+                if (ageMs <= CONFIG.UP_STOP_AT_MS) {
+                    const records = await this._storeMoments([{ ...data, _amId: ids[i] }]);
+                    if (records.length) {
+                        const maxAm = Math.max(...records.map(r => r.amId));
+                        if (maxAm > state.latestAmId) {
+                            state.latestAmId = maxAm;
+                            utils.setLastAmId(maxAm);
+                        }
+                        utils.setLastDiscoveryAt(Date.now());
+                        utils.log(`快速定位成功: am${maxAm}`);
+                        return records;
+                    }
+                }
+                if (ageMs > probeNewest) probeNewest = ageMs;
+            }
+
+            if (probeHasData) {
+                lastFoundId = probeId + CONFIG.FF_PROBE_SIZE - 1;
+                emptyProbes = 0;
+            } else {
+                emptyProbes++;
+                if (emptyProbes >= 3 && lastFoundId > startId) break;
+            }
+
+            step *= CONFIG.FF_STEP_MULTIPLIER;
+            await new Promise(r => setTimeout(r, CONFIG.CRAWL_BATCH_DELAY_MS));
+        }
+
+        // 未找到新鲜动态 → 从最后命中位置回退到普通爬取
+        const crawlFrom = lastFoundId > startId ? lastFoundId : startId;
+        if (onStatus) onStatus(`快速定位... 从 am${crawlFrom} 逐号查找`);
+        const { moments } = await api.crawlMoments(crawlFrom, CONFIG.UP_CRAWL_TARGET, {
+            direction: 'up',
+            skipFansOnly: true,
+            stopMs: CONFIG.UP_STOP_AT_MS
+        });
+
+        if (!moments.length) return [];
+        const records = await this._storeMoments(moments);
+        const maxAm = Math.max(...records.map(r => r.amId));
+        if (maxAm > state.latestAmId) {
+            state.latestAmId = maxAm;
+            utils.setLastAmId(maxAm);
+        }
+        utils.setLastDiscoveryAt(Date.now());
+        return records;
+    },
+
     _upPollTick() {
         if (state._upRunning) return;
         if (Date.now() < state._upNextAt) return;
