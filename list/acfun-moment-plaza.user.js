@@ -1927,7 +1927,6 @@
           stopMs: CONFIG.UP_STOP_AT_MS
         })).moments;
       }
-      await wait();
       if (!moments.length) return [];
       const records = await this._storeMoments(moments);
       const frontier = best ? lo : Math.max(...records.map((r) => r.amId));
