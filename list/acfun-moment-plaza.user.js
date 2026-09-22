@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AcFun 动态广场
 // @namespace    https://www.acfun.cn/
-// @version      3.2.9
+// @version      3.4.0
 // @description  按am号查找动态，按时间排序显示，IndexedDB 预加载缓存
 // @author       name_xxl
 // @match        https://www.acfun.cn/member*
@@ -12,6 +12,7 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @connect      www.acfun.cn
+// @connect      api-new.app.acfun.cn
 // @connect      id.app.acfun.cn
 // @connect      kuaishouzt.com
 // @run-at       document-idle
@@ -285,6 +286,7 @@
         width: 58px;
     }
     .moment-comments .area-comment-left .thumb {
+        position: relative;
         display: block;
         width: 50px;
         height: 50px;
@@ -294,6 +296,16 @@
         height: 50px;
         border-radius: 50%;
         object-fit: cover;
+    }
+    /* 头像框覆盖层：同原生机制（框图为独立 PNG/GIF，约 80x70，中心对齐头像略上移，可带头像外装饰）；楼中楼不展示 */
+    .plaza-avatar-frame {
+        position: absolute;
+        left: -15px;
+        top: -15px;
+        width: 80px;
+        height: 70px;
+        max-width: none;
+        pointer-events: none;
     }
     .moment-comments .area-comment-right {
         flex: 1;
@@ -309,12 +321,12 @@
     }
     .moment-comments .area-comment-title .name {
         text-decoration: none;
-        margin-right: 6px;
+        margin-right: 2px;
     }
     .moment-comments .area-comment-title .time_day {
         color: #999;
         font-size: 12px;
-        margin-right: 4px;
+        margin-right: 0;
     }
     .moment-comments .area-comment-title .time_times {
         color: #999;
@@ -335,31 +347,22 @@
         font-size: 12px;
         color: #999;
     }
+    /* 赞按钮图标：原版 13px SVG（base64 抄自原生评论区） */
     .moment-comments .area-comment-like {
         color: #999;
         cursor: pointer;
         margin-right: 13px;
-    }
-    .moment-comments .area-comment-like::before {
-        content: '';
-        display: inline-block;
-        width: 13px;
-        height: 13px;
-        margin-right: 4px;
-        vertical-align: -2px;
-        background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23999'%3E%3Cpath d='M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z'/%3E%3C/svg%3E") no-repeat center;
+        padding-left: 20px;
+        background: url("data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iMTNweCIgaGVpZ2h0PSIxM3B4IiB2aWV3Qm94PSIwIDAgMTMgMTMiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8IS0tIEdlbmVyYXRvcjogU2tldGNoIDUyLjUgKDY3NDY5KSAtIGh0dHA6Ly93d3cuYm9oZW1pYW5jb2RpbmcuY29tL3NrZXRjaCAtLT4KICAgIDx0aXRsZT5pY29uX2NvbW1lbnRfejwvdGl0bGU+CiAgICA8ZGVzYz5DcmVhdGVkIHdpdGggU2tldGNoLjwvZGVzYz4KICAgIDxnIGlkPSJpY29uX2NvbW1lbnRfeiIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjEiIGZpbGw9Im5vbmUiIGZpbGwtcnVsZT0iZXZlbm9kZCI+CiAgICAgICAgPGcgaWQ9InphbjEiIGZpbGw9IiM5OTk5OTkiIGZpbGwtcnVsZT0ibm9uemVybyI+CiAgICAgICAgICAgIDxwYXRoIGQ9Ik0xLjUsMyBDMi4zMjg0MjcxMiwzIDMsMy42NzE1NzI4OCAzLDQuNSBMMywxMC41IEMzLDExLjMyODQyNzEgMi4zMjg0MjcxMiwxMiAxLjUsMTIgQzAuNjcxNTcyODc1LDEyIDEuNTU0MzEyMjNlLTE1LDExLjMyODQyNzEgLTEuMTEwMjIzMDJlLTE2LDEwLjUgTC0xLjExMDIyMzAyZS0xNiw0LjUgQy0xLjExMDIyMzAyZS0xNiwzLjY3MTU3Mjg4IDAuNjcxNTcyODc1LDMgMS41LDMgWiIgaWQ9IlJlY3RhbmdsZS0xNSI+PC9wYXRoPgogICAgICAgICAgICA8cGF0aCBkPSJNMTAuNzI0Njg3NSwzLjg5NjQzNDI0IEMxMi4xNzUyNzM5LDMuODk2NDM0MjQgMTMuMjkwNjc2Nyw1LjI4MTY0OTIgMTIuOTM3NTY1Miw2LjQ3MTUxNTkgTDExLjg1NDEwMjcsMTAuMTIyNDE4MyBDMTEuNDE0OTkyNSwxMS42MDIwNzEzIDEwLjkxODg0OTgsMTIgOS40MjQ1MzI1OCwxMiBMNC41LDEyIEM0LjIyMzg1NzYzLDEyIDQsMTEuNzc2MTQyNCA0LDExLjUgTDQsNC4zNSBDNCw0LjE4MDExMDQzIDQuMDg2MjY1NDEsNC4wMjE4NDQzMSA0LjIyOTA0NzMzLDMuOTI5NzgwMjQgTDUuMjM4MDAzODIsMy4yODA5MTY0NSBDNS41NjY5MDY4NiwzLjAzMTc2Mjg3IDUuNzkzNTMxMDIsMi43NDE0OTM3MyA1Ljk1MzY0MjQ5LDIuMzk1MDE4OTggQzYuMDkyOTI0MTksMi4wOTM2MTkwMiA2LjEyMjA3MDY5LDEuOTgxNjQyMjYgNi4yNzc0ODI4OCwxLjI1OTk1OTU2IEM2LjQ4OTkzNzgsMC4yNzMzODkzNDcgNi44NjM3MzY2OSwtMC4xNjExNDk5NjggNy43OTc0MTA0NiwwLjA0MjIyODg2MTYgQzkuMjg0MjE3OTgsMC4zNjYwOTQ4NDUgOS41NzE5NDQ1MSwxLjczNDE4MTczIDguODQzMDE1OTksMy44OTY0MzQyNCBMMTAuNzI0Njg3NSwzLjg5NjQzNDI0IFoiIGlkPSJQYXRoLTQiPjwvcGF0aD4KICAgICAgICA8L2c+CiAgICA8L2c+Cjwvc3ZnPg==") no-repeat 1px 1px / 13px 13px;
     }
     .moment-comments .area-comment-like:hover {
         color: #fd4c5c;
+        background-image: url("data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iMTNweCIgaGVpZ2h0PSIxM3B4IiB2aWV3Qm94PSIwIDAgMTMgMTMiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8IS0tIEdlbmVyYXRvcjogU2tldGNoIDUyLjUgKDY3NDY5KSAtIGh0dHA6Ly93d3cuYm9oZW1pYW5jb2RpbmcuY29tL3NrZXRjaCAtLT4KICAgIDx0aXRsZT5pY29uX2NvbW1lbnRfejwvdGl0bGU+CiAgICA8ZGVzYz5DcmVhdGVkIHdpdGggU2tldGNoLjwvZGVzYz4KICAgIDxnIGlkPSJpY29uX2NvbW1lbnRfeiIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjEiIGZpbGw9Im5vbmUiIGZpbGwtcnVsZT0iZXZlbm9kZCI+CiAgICAgICAgPGcgaWQ9InphbjEiIGZpbGw9IiNmZDRjNWMiIGZpbGwtcnVsZT0ibm9uemVybyI+CiAgICAgICAgICAgIDxwYXRoIGQ9Ik0xLjUsMyBDMi4zMjg0MjcxMiwzIDMsMy42NzE1NzI4OCAzLDQuNSBMMywxMC41IEMzLDExLjMyODQyNzEgMi4zMjg0MjcxMiwxMiAxLjUsMTIgQzAuNjcxNTcyODc1LDEyIDEuNTU0MzEyMjNlLTE1LDExLjMyODQyNzEgLTEuMTEwMjIzMDJlLTE2LDEwLjUgTC0xLjExMDIyMzAyZS0xNiw0LjUgQy0xLjExMDIyMzAyZS0xNiwzLjY3MTU3Mjg4IDAuNjcxNTcyODc1LDMgMS41LDMgWiIgaWQ9IlJlY3RhbmdsZS0xNSI+PC9wYXRoPgogICAgICAgICAgICA8cGF0aCBkPSJNMTAuNzI0Njg3NSwzLjg5NjQzNDI0IEMxMi4xNzUyNzM5LDMuODk2NDM0MjQgMTMuMjkwNjc2Nyw1LjI4MTY0OTIgMTIuOTM3NTY1Miw2LjQ3MTUxNTkgTDExLjg1NDEwMjcsMTAuMTIyNDE4MyBDMTEuNDE0OTkyNSwxMS42MDIwNzEzIDEwLjkxODg0OTgsMTIgOS40MjQ1MzI1OCwxMiBMNC41LDEyIEM0LjIyMzg1NzYzLDEyIDQsMTEuNzc2MTQyNCA0LDExLjUgTDQsNC4zNSBDNCw0LjE4MDExMDQzIDQuMDg2MjY1NDEsNC4wMjE4NDQzMSA0LjIyOTA0NzMzLDMuOTI5NzgwMjQgTDUuMjM4MDAzODIsMy4yODA5MTY0NSBDNS41NjY5MDY4NiwzLjAzMTc2Mjg3IDUuNzkzNTMxMDIsMi43NDE0OTM3MyA1Ljk1MzY0MjQ5LDIuMzk1MDE4OTggQzYuMDkyOTI0MTksMi4wOTM2MTkwMiA2LjEyMjA3MDY5LDEuOTgxNjQyMjYgNi4yNzc0ODI4OCwxLjI1OTk1OTU2IEM2LjQ4OTkzNzgsMC4yNzMzODkzNDcgNi44NjM3MzY2OSwtMC4xNjExNDk5NjggNy43OTc0MTA0NiwwLjA0MjIyODg2MTYgQzkuMjg0MjE3OTgsMC4zNjYwOTQ4NDUgOS41NzE5NDQ1MSwxLjczNDE4MTczIDguODQzMDE1OTksMy44OTY0MzQyNCBMMTAuNzI0Njg3NSwzLjg5NjQzNDI0IFoiIGlkPSJQYXRoLTQiPjwvcGF0aD4KICAgICAgICA8L2c+CiAgICA8L2c+Cjwvc3ZnPg==");
     }
-    .moment-comments .area-comment-like:hover::before {
-        background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23fd4c5c'%3E%3Cpath d='M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z'/%3E%3C/svg%3E") no-repeat center;
-    }
-    .moment-comments .area-comment-like.area-comment-up {
+    .moment-comments .area-comment-like.area-comment-up,
+    .moment-comments .area-comment-like[active] {
         color: #fd4c5c !important;
-    }
-    .moment-comments .area-comment-like.area-comment-up::before {
-        background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23fd4c5c'%3E%3Cpath d='M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z'/%3E%3C/svg%3E") no-repeat center;
+        background-image: url("data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iMTNweCIgaGVpZ2h0PSIxM3B4IiB2aWV3Qm94PSIwIDAgMTMgMTMiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8IS0tIEdlbmVyYXRvcjogU2tldGNoIDUyLjUgKDY3NDY5KSAtIGh0dHA6Ly93d3cuYm9oZW1pYW5jb2RpbmcuY29tL3NrZXRjaCAtLT4KICAgIDx0aXRsZT5pY29uX2NvbW1lbnRfejwvdGl0bGU+CiAgICA8ZGVzYz5DcmVhdGVkIHdpdGggU2tldGNoLjwvZGVzYz4KICAgIDxnIGlkPSJpY29uX2NvbW1lbnRfeiIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjEiIGZpbGw9Im5vbmUiIGZpbGwtcnVsZT0iZXZlbm9kZCI+CiAgICAgICAgPGcgaWQ9InphbjEiIGZpbGw9IiNmZDRjNWMiIGZpbGwtcnVsZT0ibm9uemVybyI+CiAgICAgICAgICAgIDxwYXRoIGQ9Ik0xLjUsMyBDMi4zMjg0MjcxMiwzIDMsMy42NzE1NzI4OCAzLDQuNSBMMywxMC41IEMzLDExLjMyODQyNzEgMi4zMjg0MjcxMiwxMiAxLjUsMTIgQzAuNjcxNTcyODc1LDEyIDEuNTU0MzEyMjNlLTE1LDExLjMyODQyNzEgLTEuMTEwMjIzMDJlLTE2LDEwLjUgTC0xLjExMDIyMzAyZS0xNiw0LjUgQy0xLjExMDIyMzAyZS0xNiwzLjY3MTU3Mjg4IDAuNjcxNTcyODc1LDMgMS41LDMgWiIgaWQ9IlJlY3RhbmdsZS0xNSI+PC9wYXRoPgogICAgICAgICAgICA8cGF0aCBkPSJNMTAuNzI0Njg3NSwzLjg5NjQzNDI0IEMxMi4xNzUyNzM5LDMuODk2NDM0MjQgMTMuMjkwNjc2Nyw1LjI4MTY0OTIgMTIuOTM3NTY1Miw2LjQ3MTUxNTkgTDExLjg1NDEwMjcsMTAuMTIyNDE4MyBDMTEuNDE0OTkyNSwxMS42MDIwNzEzIDEwLjkxODg0OTgsMTIgOS40MjQ1MzI1OCwxMiBMNC41LDEyIEM0LjIyMzg1NzYzLDEyIDQsMTEuNzc2MTQyNCA0LDExLjUgTDQsNC4zNSBDNCw0LjE4MDExMDQzIDQuMDg2MjY1NDEsNC4wMjE4NDQzMSA0LjIyOTA0NzMzLDMuOTI5NzgwMjQgTDUuMjM4MDAzODIsMy4yODA5MTY0NSBDNS41NjY5MDY4NiwzLjAzMTc2Mjg3IDUuNzkzNTMxMDIsMi43NDE0OTM3MyA1Ljk1MzY0MjQ5LDIuMzk1MDE4OTggQzYuMDkyOTI0MTksMi4wOTM2MTkwMiA2LjEyMjA3MDY5LDEuOTgxNjQyMjYgNi4yNzc0ODI4OCwxLjI1OTk1OTU2IEM2LjQ4OTkzNzgsMC4yNzMzODkzNDcgNi44NjM3MzY2OSwtMC4xNjExNDk5NjggNy43OTc0MTA0NiwwLjA0MjIyODg2MTYgQzkuMjg0MjE3OTgsMC4zNjYwOTQ4NDUgOS41NzE5NDQ1MSwxLjczNDE4MTczIDguODQzMDE1OTksMy44OTY0MzQyNCBMMTAuNzI0Njg3NSwzLjg5NjQzNDI0IFoiIGlkPSJQYXRoLTQiPjwvcGF0aD4KICAgICAgICA8L2c+CiAgICA8L2c+Cjwvc3ZnPg==");
     }
     .moment-comments .area-comment-from {
         color: #999;
@@ -399,17 +402,16 @@
     }
     .moment-comments .area-comment-sec .area-comment-right {
         margin-left: 0;
-        padding-right: 10px;
+        padding-right: 0;
     }
     .moment-comments .area-comment-sec .area-comment-first {
-        padding: 0 10px 0;
+        padding: 0;
         margin: 15px 0 0;
     }
     .moment-comments .area-comment-sec .sec:first-child .area-comment-first {
         margin-top: 0;
     }
     .moment-comments .area-comment-sec .name {
-        color: #333;
         font-weight: 700;
     }
     .moment-comments .area-comment-sec hr {
@@ -418,15 +420,6 @@
     .plaza-reply-prefix {
         color: #999;
         font-size: 14px;
-    }
-    .moment-comments .plaza-up-tag {
-        background: #fd4c5c;
-        color: #fff;
-        font-size: 10px;
-        padding: 0 4px;
-        border-radius: 2px;
-        margin-right: 6px;
-        vertical-align: middle;
     }
     .plaza-comment-empty, .plaza-comment-load-failed {
         padding: 20px 0;
@@ -539,70 +532,185 @@
     .plaza-editor-pending-del:hover {
         color: #fd4c5c;
     }
-    /* 表情面板 */
+    /* 表情面板：对齐原生三段式——头部包名 / 6 列大格子网格 / 底部灰底包切换条 */
     .plaza-emot-panel {
         position: absolute;
-        bottom: calc(100% + 6px);
+        bottom: calc(100% + 10px);
         left: 0;
-        width: 360px;
-        max-height: 300px;
-        overflow-y: auto;
+        width: 560px;
+        max-width: calc(100vw - 48px);
+        display: none;
+        flex-direction: column;
         background: #fff;
-        border: 1px solid #e6e6e6;
-        border-radius: 6px;
-        box-shadow: 0 4px 16px rgba(0,0,0,.12);
-        padding: 10px 12px;
+        border: 1px solid #e8e8e8;
+        border-radius: 8px;
+        box-shadow: 0 6px 24px rgba(0,0,0,.14);
+        box-sizing: border-box;
         z-index: 100;
     }
-    .plaza-emot-pack-name {
-        font-size: 12px;
-        color: #999;
-        margin: 8px 0 6px;
+    .plaza-emot-panel.open {
+        display: flex;
     }
-    .plaza-emot-pack:first-child .plaza-emot-pack-name {
-        margin-top: 0;
+    /* 指向表情按钮的小三角 */
+    .plaza-emot-panel::before {
+        content: '';
+        position: absolute;
+        top: -6px;
+        left: 22px;
+        width: 10px;
+        height: 10px;
+        background: #fff;
+        border-left: 1px solid #e8e8e8;
+        border-top: 1px solid #e8e8e8;
+        transform: rotate(45deg);
+    }
+    .plaza-emot-head {
+        flex: 0 0 auto;
+        padding: 14px 20px 8px;
+    }
+    .plaza-emot-pack-name {
+        font-size: 14px;
+        color: #333;
     }
     .plaza-emot-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, 34px);
-        gap: 4px;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 2px 6px;
+        padding: 0 14px;
+        max-height: 316px;
+        overflow-y: auto;
+        min-height: 0;
+        flex: 1 1 auto;
+        overscroll-behavior: contain;
     }
     .plaza-emot-item {
-        width: 30px;
-        height: 30px;
+        width: 100%;
+        height: 56px;
+        padding: 6px;
+        box-sizing: border-box;
         object-fit: contain;
         cursor: pointer;
+        border-radius: 6px;
     }
-    .plaza-emot-item[data-pkg="AC娘迷你版"] {
+    .plaza-emot-item:hover {
+        background: #f2f2f2;
+    }
+    .plaza-emot-foot {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        margin-top: 8px;
+        padding: 6px 10px;
+        background: #f8f8f8;
+        border-top: 1px solid #f0f0f0;
+        border-radius: 0 0 7px 7px;
+    }
+    .plaza-emot-strip {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        overflow-x: auto;
+        scrollbar-width: none;
+        min-width: 0;
+        flex: 1 1 auto;
+        padding: 3px;
+    }
+    .plaza-emot-strip::-webkit-scrollbar {
+        display: none;
+    }
+    /* 加 .plaza-emot-panel 前缀压过 .plaza-comment-editor button 的红色按钮全局样式 */
+    .plaza-emot-panel .plaza-emot-pack-thumb {
+        flex: 0 0 auto;
+        width: 36px;
+        height: 36px;
+        padding: 0;
+        border: none;
+        border-radius: 4px;
+        background: none;
+        cursor: pointer;
+        opacity: .75;
+        transition: width .12s ease, height .12s ease, opacity .12s ease;
+    }
+    .plaza-emot-panel .plaza-emot-pack-thumb img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
+    }
+    .plaza-emot-panel .plaza-emot-pack-thumb:hover {
+        opacity: 1;
+    }
+    .plaza-emot-panel .plaza-emot-pack-thumb.active {
+        width: 46px;
+        height: 46px;
+        opacity: 1;
+    }
+    .plaza-emot-panel .plaza-emot-foot-page {
+        flex: 0 0 auto;
         width: 26px;
         height: 26px;
+        padding: 0;
+        border: none;
+        border-radius: 50%;
+        background: none;
+        color: #666;
+        font-size: 20px;
+        line-height: 24px;
+        text-align: center;
+        cursor: pointer;
+    }
+    .plaza-emot-panel .plaza-emot-foot-page:hover {
+        background: #e9e9e9;
     }
     .plaza-emot-empty {
         color: #999;
         font-size: 12px;
         padding: 8px 0;
     }
+    /* 悬停大图预览浮层（fixed，尺寸与 emotpanel.js 中常量一致） */
+    .plaza-emot-preview {
+        display: none;
+        position: fixed;
+        z-index: 1000;
+        width: 140px;
+        padding: 8px;
+        background: #fff;
+        border: 1px solid #e6e6e6;
+        border-radius: 8px;
+        box-shadow: 0 6px 20px rgba(0,0,0,.15);
+        text-align: center;
+        pointer-events: none;
+    }
+    .plaza-emot-preview.show {
+        display: block;
+    }
+    .plaza-emot-preview img {
+        width: 120px;
+        height: 120px;
+        object-fit: contain;
+    }
+    .plaza-emot-preview span {
+        display: block;
+        margin-top: 4px;
+        font-size: 12px;
+        color: #666;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
     /* 回复按钮与回复框 */
     .plaza-reply-btn {
         color: #999;
         cursor: pointer;
-        margin-right: 16px;
+        margin-right: 13px;
         font-size: 12px;
-    }
-    .plaza-reply-btn::before {
-        content: '';
-        display: inline-block;
-        width: 14px;
-        height: 14px;
-        margin-right: 4px;
-        vertical-align: -2px;
-        background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23999'%3E%3Cpath d='M21.99 4c0-1.1-.89-2-1.99-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14l4 4-.01-18z'/%3E%3C/svg%3E") no-repeat center;
+        padding-left: 17px;
+        background: url("data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iMTNweCIgaGVpZ2h0PSIxM3B4IiB2aWV3Qm94PSIwIDAgMTMgMTMiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8IS0tIEdlbmVyYXRvcjogU2tldGNoIDUyLjUgKDY3NDY5KSAtIGh0dHA6Ly93d3cuYm9oZW1pYW5jb2RpbmcuY29tL3NrZXRjaCAtLT4KICAgIDx0aXRsZT5pY29uX2NvbW1lbnRfcGw8L3RpdGxlPgogICAgPGRlc2M+Q3JlYXRlZCB3aXRoIFNrZXRjaC48L2Rlc2M+CiAgICA8ZyBpZD0iaWNvbl9jb21tZW50X3BsIiBzdHJva2U9Im5vbmUiIHN0cm9rZS13aWR0aD0iMSIgZmlsbD0ibm9uZSIgZmlsbC1ydWxlPSJldmVub2RkIj4KICAgICAgICA8ZyBpZD0iaWNvbl/mlofnq6Dor4TorrotY29weS0yIiBmaWxsPSIjOTk5OTk5IiBmaWxsLXJ1bGU9Im5vbnplcm8iPgogICAgICAgICAgICA8cGF0aCBkPSJNNC4wNzAwMjc0NywxMiBMMC42MzczNjA1NjQsMTIuOTgwNzYyIEMwLjMxNzk1MjQ2MSwxMy4wNzIwMjE0IDAsMTIuODMyMTg5NCAwLDEyLjUgTDAsNCBDMCwyLjcyMzg1NzYzIDAuNzIzODU3NjI1LDIgMiwyIEwxMSwyIEMxMi4yNzYxNDI0LDIgMTMsMi43MjM4NTc2MyAxMyw0IEwxMywxMCBDMTMsMTEuMjc2MTQyNCAxMi4yNzYxNDI0LDEyIDExLDEyIEw0LjA3MDAyNzQ3LDEyIFogTTksNSBDOC40NDc3MTUyNSw1IDgsNS40NDc3MTUyNSA4LDYgTDgsNyBDOCw3LjU1MjI4NDc1IDguNDQ3NzE1MjUsOCA5LDggQzkuNTUyMjg0NzUsOCAxMCw3LjU1MjI4NDc1IDEwLDcgTDEwLDYgQzEwLDUuNDQ3NzE1MjUgOS41NTIyODQ3NSw1IDksNSBaIE00LDUgQzMuNDQ3NzE1MjUsNSAzLDUuNDQ3NzE1MjUgMyw2IEwzLDcgQzMsNy41NTIyODQ3NSAzLjQ0NzcxNTI1LDggNCw4IEM0LjU1MjI4NDc1LDggNSw3LjU1MjI4NDc1IDUsNyBMNSw2IEM1LDUuNDQ3NzE1MjUgNC41NTIyODQ3NSw1IDQsNSBaIiBpZD0iQ29tYmluZWQtU2hhcGUiPjwvcGF0aD4KICAgICAgICA8L2c+CiAgICA8L2c+Cjwvc3ZnPg==") no-repeat 0 1px / 13px 13px;
     }
     .plaza-reply-btn:hover {
         color: #fd4c5c;
-    }
-    .plaza-reply-btn:hover::before {
-        background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23fd4c5c'%3E%3Cpath d='M21.99 4c0-1.1-.89-2-1.99-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14l4 4-.01-18z'/%3E%3C/svg%3E") no-repeat center;
+        background-image: url("data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iMTNweCIgaGVpZ2h0PSIxM3B4IiB2aWV3Qm94PSIwIDAgMTMgMTMiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8IS0tIEdlbmVyYXRvcjogU2tldGNoIDUyLjUgKDY3NDY5KSAtIGh0dHA6Ly93d3cuYm9oZW1pYW5jb2RpbmcuY29tL3NrZXRjaCAtLT4KICAgIDx0aXRsZT5pY29uX2NvbW1lbnRfcGw8L3RpdGxlPgogICAgPGRlc2M+Q3JlYXRlZCB3aXRoIFNrZXRjaC48L2Rlc2M+CiAgICA8ZyBpZD0iaWNvbl9jb21tZW50X3BsIiBzdHJva2U9Im5vbmUiIHN0cm9rZS13aWR0aD0iMSIgZmlsbD0ibm9uZSIgZmlsbC1ydWxlPSJldmVub2RkIj4KICAgICAgICA8ZyBpZD0iaWNvbl/mlofnq6Dor4TorrotY29weS0yIiBmaWxsPSIjZmQ0YzVjIiBmaWxsLXJ1bGU9Im5vbnplcm8iPgogICAgICAgICAgICA8cGF0aCBkPSJNNC4wNzAwMjc0NywxMiBMMC42MzczNjA1NjQsMTIuOTgwNzYyIEMwLjMxNzk1MjQ2MSwxMy4wNzIwMjE0IDAsMTIuODMyMTg5NCAwLDEyLjUgTDAsNCBDMCwyLjcyMzg1NzYzIDAuNzIzODU3NjI1LDIgMiwyIEwxMSwyIEMxMi4yNzYxNDI0LDIgMTMsMi43MjM4NTc2MyAxMyw0IEwxMywxMCBDMTMsMTEuMjc2MTQyNCAxMi4yNzYxNDI0LDEyIDExLDEyIEw0LjA3MDAyNzQ3LDEyIFogTTksNSBDOC40NDc3MTUyNSw1IDgsNS40NDc3MTUyNSA4LDYgTDgsNyBDOCw3LjU1MjI4NDc1IDguNDQ3NzE1MjUsOCA5LDggQzkuNTUyMjg0NzUsOCAxMCw3LjU1MjI4NDc1IDEwLDcgTDEwLDYgQzEwLDUuNDQ3NzE1MjUgOS41NTIyODQ3NSw1IDksNSBaIE00LDUgQzMuNDQ3NzE1MjUsNSAzLDUuNDQ3NzE1MjUgMyw2IEwzLDcgQzMsNy41NTIyODQ3NSAzLjQ0NzcxNTI1LDggNCw4IEM0LjU1MjI4NDc1LDggNSw3LjU1MjI4NDc1IDUsNyBMNSw2IEM1LDUuNDQ3NzE1MjUgNC41NTIyODQ3NSw1IDQsNSBaIiBpZD0iQ29tYmluZWQtU2hhcGUiPjwvcGF0aD4KICAgICAgICA8L2c+CiAgICA8L2c+Cjwvc3ZnPg==");
     }
     .plaza-reply-box {
         display: flex;
@@ -699,22 +807,6 @@
     }
 `;
   var uiStyles = `
-    /* 首次设置框 */
-    .plaza-setup-box {
-        max-width: 500px;
-        margin: 80px auto;
-        padding: 30px;
-        background: #fff;
-        border-radius: 8px;
-        box-shadow: 0 2px 12px rgba(0,0,0,.08);
-        text-align: left;
-    }
-    #plaza-link-input:focus {
-        border-color: #fd4c5c;
-    }
-    #plaza-link-btn:hover {
-        background: #e8434f;
-    }
     /* 侧边栏动态广场选中样式（仿原生） */
     .plaza-nav-item.ac-member-navigation-item-active {
         color: #fd4c5c !important;
@@ -775,29 +867,20 @@
 
   // src/config.js
   var CONFIG = {
+    FEED_SQUARE_API: "https://api-new.app.acfun.cn/rest/app/feed/feedSquare",
+    // 动态广场列表（免登录，每页固定 20 条，pcursor 翻页）
     MOMENT_API: "https://www.acfun.cn/rest/pc-direct/moment/detail",
-    CONCURRENT: 10,
-    // 并发请求数
-    MAX_EMPTY: 30,
-    // 连续空号上限
-    BATCH_SIZE: 20,
-    // 向上/向下每次加载的固定条数
+    // 单条动态详情（互动数字刷新用）
     FRESH_WINDOW_MS: 3 * 3600 * 1e3,
     // 发布 ≤3 小时 → 互动数字用加载动画 + 后台注入
-    UP_STOP_AT_MS: 1 * 3600 * 1e3,
-    // 向上爬到「发布 ≤1 小时」的动态即停
     DOWN_STOP_AFTER_MS: 24 * 3600 * 1e3,
-    // 向下爬到「发布 >24 小时」的动态即停
+    // 向下翻到「发布 >24 小时」的动态即停
     UP_POLL_INTERVAL: 60 * 1e3,
     // 向上后台轮询的基准间隔
     UP_POLL_BACKOFF_MAX_MS: 10 * 60 * 1e3,
     // 向上轮询空手而归后的退避上限
     KEEP_DAYS_DEFAULT: 3,
     // 数据库默认保留天数（1-7 可调）
-    CRAWL_BATCH_DELAY_MS: 60,
-    // 爬取批次之间的停顿
-    SCAN_LIMIT_MULTIPLIER: 50,
-    // 单次爬取的扫描上限 = 目标条数 × 此倍数
     TOKEN_TTL_MS: 30 * 60 * 1e3,
     // 互动 API token 有效期
     MAX_IMAGES: 9,
@@ -818,26 +901,6 @@
     // 分享复制成功提示时长
     COMMENT_PAGE_SIZE: 10,
     // 评论列表每页条数
-    UP_CRAWL_TARGET: 50,
-    // 向上后台爬取的目标条数
-    FF_STALE_THRESHOLD_MS: 2 * 3600 * 1e3,
-    // 数据超过此时间视为旧，触发快速定位
-    FF_PROBE_SPAN_MS: 10 * 60 * 1e3,
-    // 探针采样宽度覆盖的时间跨度（按速率换算成 ID 数）
-    FF_PROBE_SIZE: 5,
-    // 探针最少采样的连续 am 号数（速率未知时）
-    FF_PROBE_MAX: 30,
-    // 探针最多采样的连续 am 号数
-    FF_CONVERGE_GAP: 20,
-    // 上下界收敛到此间隔即停止，交给逐号补抓
-    FF_MAX_PROBES: 24,
-    // 最大探针轮数
-    FF_INITIAL_STEP: 2e3,
-    // 速率未知时的盲跳初始步长
-    FF_STEP_MULTIPLIER: 4,
-    // 盲跳命中后的步长倍率
-    FF_MIN_STEP: 50,
-    // 盲跳落空则减半，低于此值即认定越过边界
     KEEP_DAYS_OPTIONS: [1, 2, 3, 4, 5, 6, 7],
     // 保留天数可选项
     UPLOAD_CHUNK_SIZE: 1 * 1024 * 1024,
@@ -845,7 +908,6 @@
     MAX_IMAGE_SIZE: 5 * 1024 * 1024
     // 评论图片大小上限（原生提示 5M）
   };
-  var LAST_AM_KEY = "moment_plaza_last_am";
   var KEEP_DAYS_KEY = "moment_plaza_keep_days";
   var AUTO_ENTER_KEY = "moment_plaza_auto_enter";
   var LAST_DISCOVERY_KEY = "moment_plaza_last_discovery";
@@ -859,28 +921,26 @@
     moments: [],
     // 当前展示的记录 [{ amId, absTs, data, fetchedAt }]
     latestAmId: 0,
-    // 已知最大 am 号（向上探测边界，持久化）
-    oldestAmId: 0,
-    // 当前展示最旧 am 号
+    // 已知最大 am 号（轮询发现新动态的 diff 基准，会话内维护）
+    _downCursor: "",
+    // feedSquare 向下翻页游标（'' = 第一页）
     _scrollHandler: null,
     _downLoading: false,
     _noMoreDown: false,
     _upRunning: false,
-    // 正在向上爬取
+    // 正在拉取最新动态
     _upPollTimer: null,
     // 向上定时器
     _upBackoffMs: 0,
     // 向上轮询当前退避间隔（空手而归翻倍，命中即复位）
     _upNextAt: 0,
-    // 早于该时间戳不发起向上爬取
-    _upProbedTo: 0,
-    // 本次会话已向上探测到的最高 am 号（跨空号断层用，页面刷新后重探）
+    // 早于该时间戳不发起向上轮询
     _upGeneration: 0,
-    // 向上搜索代数，refresh 时递增使旧搜索回调失效
+    // 向上拉取代数，refresh 时递增使旧响应失效
     emoticonMap: null,
-    // 表情码→图片 { emotionId: { url, pkg } }
+    // 表情码→图片 { emotionId: { url, big, name, pkg } }
     emoticonPacks: null
-    // 表情面板数据 [{ name, items: [{ id, url }] }]
+    // 表情面板数据 [{ name, items: [{ id, url, big, name }] }]
   };
 
   // src/utils.js
@@ -994,19 +1054,6 @@
       html = html.replace(/\r?\n/g, "<br>");
       return html;
     },
-    getLastAmId() {
-      try {
-        return GM_getValue(LAST_AM_KEY, 0);
-      } catch {
-        return 0;
-      }
-    },
-    setLastAmId(amId) {
-      try {
-        GM_setValue(LAST_AM_KEY, amId);
-      } catch (e) {
-      }
-    },
     getKeepDays() {
       try {
         const d = GM_getValue(KEEP_DAYS_KEY, CONFIG.KEEP_DAYS_DEFAULT);
@@ -1081,33 +1128,6 @@
         tx.onerror = () => reject(tx.error);
       });
     },
-    // 取 amId < fromId 的 count 条（按 amId 降序，即较新的在前）
-    // 旧版本存下的「粉丝可见」遗留记录不进入展示流（会随保留天数自动清除）
-    async getOlderThan(fromId, count) {
-      const d = await this.open();
-      return new Promise((resolve, reject) => {
-        const store = d.transaction(STORE_MOMENTS, "readonly").objectStore(STORE_MOMENTS);
-        const range = IDBKeyRange.upperBound(fromId, true);
-        const result = [];
-        const req = store.openCursor(range, "prev");
-        req.onsuccess = (e) => {
-          const cursor = e.target.result;
-          if (!cursor) {
-            resolve(result);
-            return;
-          }
-          if (!(cursor.value.data && cursor.value.data.visibleForFans)) {
-            result.push(cursor.value);
-          }
-          if (result.length < count) {
-            cursor.continue();
-          } else {
-            resolve(result);
-          }
-        };
-        req.onerror = () => reject(req.error);
-      });
-    },
     // 删除 absTs < cutoffTs 的过期记录
     async deleteOlderThan(cutoffTs) {
       const d = await this.open();
@@ -1138,13 +1158,15 @@
     const byName = {};
     for (const u of flat) {
       if (!u || !u.emotionId || !u.emotionImageUrl) continue;
-      map[u.emotionId] = { url: u.emotionImageUrl, pkg: u.emotionPkgName || "" };
+      const big = u.emotionBigUrl || u.emotionImageUrl;
+      const name = u.emotionName || "";
+      map[u.emotionId] = { url: u.emotionImageUrl, big, name, pkg: u.emotionPkgName || "" };
       let pack = byName[u.emotionPkgName];
       if (!pack) {
         pack = byName[u.emotionPkgName] = { name: u.emotionPkgName || "表情", items: [] };
         packs.push(pack);
       }
-      pack.items.push({ id: u.emotionId, url: u.emotionImageUrl });
+      pack.items.push({ id: u.emotionId, url: u.emotionImageUrl, big, name });
     }
     state.emoticonMap = map;
     state.emoticonPacks = packs;
@@ -1229,7 +1251,14 @@
               for (const p of packs) {
                 for (const it of p.emotions || []) {
                   const url = it.emotionImageSmallUrl || it.smallImageInfo && it.smallImageInfo.thumbnailImageCdnUrl || it.smallImageInfo && it.smallImageInfo.thumbnailImage && it.smallImageInfo.thumbnailImage.cdnUrls && it.smallImageInfo.thumbnailImage.cdnUrls[0] && it.smallImageInfo.thumbnailImage.cdnUrls[0].url || "";
-                  flat.push({ emotionId: it.id, emotionPkgName: p.name, emotionImageUrl: url });
+                  const rawBig = typeof it.emotionImageBigUrl === "string" && it.emotionImageBigUrl || it.bigImageInfo && it.bigImageInfo.thumbnailImageCdnUrl || it.bigImageInfo && it.bigImageInfo.thumbnailImage && it.bigImageInfo.thumbnailImage.cdnUrls && it.bigImageInfo.thumbnailImage.cdnUrls[0] && it.bigImageInfo.thumbnailImage.cdnUrls[0].url || "";
+                  flat.push({
+                    emotionId: it.id,
+                    emotionPkgName: p.name,
+                    emotionImageUrl: url,
+                    emotionBigUrl: rawBig || url,
+                    emotionName: typeof it.name === "string" && it.name || ""
+                  });
                 }
               }
               _applyEmoticons(flat);
@@ -1431,73 +1460,60 @@
         });
       });
     },
-    // 逐号并发探测动态（direction: 'up' 向上找新动态 / 'down' 向下找历史动态）
-    // opts: { skipFansOnly, stopMs }
-    //   up：遇到发布时间距今 ≤stopMs 的动态即停（该条保留）
-    //   down：遇到发布时间距今 >stopMs 的动态即停（该条丢弃）
-    // 返回 { moments, probedTo }：probedTo 为本次实际探测过的边界 am 号（up=最高号，down=最低号）
-    async crawlMoments(startId, targetCount = CONFIG.BATCH_SIZE, opts = {}) {
-      const up = opts.direction !== "down";
-      const results = [];
-      let currentId = up ? startId + 1 : startId - 1;
-      let emptyCount = 0;
-      let totalChecked = 0;
-      const MAX_SCAN = targetCount * CONFIG.SCAN_LIMIT_MULTIPLIER;
-      while (results.length < targetCount && totalChecked < MAX_SCAN && currentId > 0) {
-        const room = targetCount - results.length;
-        const batchIds = [];
-        for (let i = 0; i < Math.min(CONFIG.CONCURRENT, room, up ? Infinity : currentId); i++) {
-          batchIds.push(up ? currentId + i : currentId - i);
-        }
-        totalChecked += batchIds.length;
-        const batchResults = await Promise.all(batchIds.map(
-          (amId) => this.fetchMoment(amId).then((data) => {
-            if (data && data.result === 0 && data.moment) {
-              const moment = data.moment;
-              if (opts.skipFansOnly && moment.visibleForFans) {
-                return { amId, fansOnly: true };
+    // 拉取动态广场列表（APP 端接口，免登录，服务端已过滤粉丝可见，每页固定 20 条，不含转发）
+    // cursor 为空拉最新一页，否则按 pcursor 续翻更旧的一页；翻到底时 pcursor 返回 "no_more"
+    // 返回 { records: [{ amId, absTs, data, fetchedAt }], nextCursor, noMore }，请求失败返回 null
+    fetchFeedSquare(cursor = "") {
+      return new Promise((resolve) => {
+        const qs = cursor ? `?pcursor=${encodeURIComponent(cursor)}` : "";
+        GM_xmlhttpRequest({
+          method: "GET",
+          url: `${CONFIG.FEED_SQUARE_API}${qs}`,
+          headers: { "Accept": "application/json" },
+          onload: (response) => {
+            try {
+              const data = JSON.parse(response.responseText);
+              if (data.result !== 0 || !Array.isArray(data.feedList)) {
+                resolve(null);
+                return;
               }
-              const ageMs = utils.parseAgeMs(moment.createTime);
-              if (!up && opts.stopMs != null && ageMs > opts.stopMs) {
-                return { amId, tooOld: true };
-              }
-              const hitFresh = up && opts.stopMs != null && ageMs <= opts.stopMs;
-              return { amId, found: true, moment: data, hitFresh };
+              const now = Date.now();
+              const records = data.feedList.filter((f) => f.moment && f.moment.momentId && f.createTime).map((f) => this._squareFeedToRecord(f, now));
+              const nextCursor = String(data.pcursor || "");
+              resolve({ records, nextCursor, noMore: nextCursor === "no_more" });
+            } catch (e) {
+              resolve(null);
             }
-            return { amId, found: false };
-          })
-        ));
-        let shouldStop = false;
-        for (const r of batchResults) {
-          if (r.fansOnly) {
-            emptyCount = 0;
-            continue;
-          }
-          if (r.tooOld) {
-            shouldStop = true;
-            break;
-          }
-          if (r.found) {
-            emptyCount = 0;
-            results.push({ ...r.moment, _amId: r.amId });
-            if (r.hitFresh) shouldStop = true;
-          } else {
-            emptyCount++;
-          }
-        }
-        currentId += up ? batchIds.length : -batchIds.length;
-        if (shouldStop) {
-          utils.log(up ? "向上爬到最新，停止" : "向下爬到时间下限，停止");
-          break;
-        }
-        if (emptyCount >= CONFIG.MAX_EMPTY) {
-          utils.log(`连续 ${emptyCount} 个空号，停止`);
-          break;
-        }
-        await new Promise((r) => setTimeout(r, CONFIG.CRAWL_BATCH_DELAY_MS));
-      }
-      results.sort((a, b) => b._amId - a._amId);
-      return { moments: results, probedTo: up ? currentId - 1 : currentId + 1 };
+          },
+          onerror: () => resolve(null)
+        });
+      });
+    },
+    // feedSquare 条目 → 本地记录格式：
+    // createTime 是绝对时间戳（毫秒），直接作 absTs；互动数字在 feed 顶层（moment 内无 likeCount）；
+    // 用户信息从 user/userInfo 映射成 moment/detail 的 user 结构供 renderer 使用
+    _squareFeedToRecord(feed, now) {
+      const moment = { ...feed.moment };
+      const u = feed.user || {};
+      const info = feed.userInfo || {};
+      moment.user = {
+        id: u.userId ?? info.id ?? "",
+        name: u.userName ?? info.name ?? "",
+        headUrl: u.userHead ?? info.headUrl ?? "",
+        headCdnUrls: info.headCdnUrls || (u.userHead ? [{ url: u.userHead }] : []),
+        nameColor: u.nameColor ?? info.nameColor
+      };
+      moment.likeCount = feed.likeCount ?? 0;
+      moment.commentCount = feed.commentCount ?? moment.commentCount ?? 0;
+      moment.bananaCount = feed.bananaCount ?? moment.bananaCount ?? 0;
+      moment.isLike = feed.isLike || false;
+      moment.isThrowBanana = feed.isThrowBanana || false;
+      return {
+        amId: parseInt(moment.momentId),
+        absTs: feed.createTime,
+        data: moment,
+        fetchedAt: now
+      };
     }
   };
 
@@ -1529,7 +1545,7 @@
                     <input type="file" class="${EDITOR_FILE_CLASS}" accept="image/*" style="display:none;">
                     <button class="${EDITOR_SEND_CLASS}" data-am-id="${amId}"${replyAttr}>${utils.escapeHtml(buttonText)}</button>
                 </div>
-                <div class="${EDITOR_PANEL_CLASS}" style="display:none;"></div>
+                <div class="${EDITOR_PANEL_CLASS}"></div>
             </div>
         `;
     }
@@ -1775,7 +1791,6 @@
       const floor = comment.floor || "";
       const nameColor = comment.nameColor === 2 ? NAME_COLOR_PURPLE : NAME_COLOR_RED;
       const device = comment.deviceModel || "";
-      const isUp = comment.isUp;
       const isCommentLiked = comment.isLiked || false;
       const replyToName = comment.replyToUserName || "";
       const replyToId = comment.replyTo || 0;
@@ -1786,19 +1801,20 @@
       const subComments = comment.subComments || [];
       const subHtml = subComments.length > 0 ? `<div class="area-comment-sec clearfix"><div class="area-sec-list">${subComments.map((s) => this.renderComment(s, amId, true)).join("")}</div></div>` : "";
       const secClass = isSec ? " sec" : "";
-      const nameStyle = isSec ? "" : ` style="color:${nameColor}"`;
+      const nameStyle = ` style="color:${nameColor}"`;
+      const avatarFrame = isSec ? "" : utils.attrEscape(comment.avatarFrameImgInfo?.thumbnailImage?.cdnUrls?.[0]?.url || "");
       return `
-            <div class="area-comment-top clearfix plaza-comment-item${secClass}">
+            <div class="area-comment-top clearfix plaza-comment-item${secClass}" data-commentid="${comment.commentId}">
                 <div class="area-comment-first clearfix">
                     <div class="area-comment-left">
                         <a class="thumb" target="_blank" href="//www.acfun.cn/u/${userId}">
                             <img class="avatar" src="${avatar}">
+                            ${avatarFrame ? `<img class="plaza-avatar-frame" src="${avatarFrame}" alt="">` : ""}
                         </a>
                     </div>
                     <div class="area-comment-right">
                         <div class="area-comment-title">
-                            <a class="name" target="_blank" href="//www.acfun.cn/u/${userId}"${nameStyle}>${utils.escapeHtml(userName)}</a>
-                            ${isUp ? '<span class="plaza-up-tag">UP主</span>' : ""}
+                            <a class="name" data-userid="${userId}" target="_blank" href="//www.acfun.cn/u/${userId}"${nameStyle}>${utils.escapeHtml(userName)}</a>
                             <span class="time_day">发表于</span>
                             <span class="time_times">${time}</span>
                         </div>
@@ -1862,11 +1878,8 @@
 
   // src/background.js
   var background = {
-    // 启动：有 am 号就开启向上后台定时爬取 + 过期清理
+    // 启动：后台定时拉最新动态（feedSquare 第一页）+ 过期清理
     start() {
-      const knownAmId = utils.getLastAmId();
-      if (!knownAmId || knownAmId <= 0) return;
-      state.latestAmId = knownAmId;
       const lastDiscovery = utils.getLastDiscoveryAt();
       if (lastDiscovery) {
         const idleMs = Date.now() - lastDiscovery;
@@ -1885,10 +1898,9 @@
       if (idleMs < 6 * 3600 * 1e3) return Math.min(min * 8, max);
       return max;
     },
-    // ========== 向上爬取（后台定时，空手退避 + 跨空号断层） ==========
+    // ========== 向上轮询（拉最新一页，diff 出新动态，空手退避） ==========
     _startUpwardPoll() {
       if (state._upPollTimer) return;
-      this._upPollTick();
       state._upPollTimer = setInterval(() => this._upPollTick(), CONFIG.UP_POLL_INTERVAL);
     },
     _stopUpwardPoll() {
@@ -1900,132 +1912,6 @@
     _cancelRunningSearch() {
       state._upGeneration++;
       state._upRunning = false;
-      state._upProbedTo = 0;
-    },
-    // 快速定位最新动态：按「时间 → am 号」外推，而非盲跳固定步长
-    // 用本地已有记录的号差/时间差测出增长速率，直接跳到「此刻」对应的 am 号附近；
-    // 越过边界（整段空号）则在已知区间内收敛，命中旧数据则用新锚点修正速率继续外推
-    async _fastForward(onStatus) {
-      const startId = state.latestAmId;
-      if (!startId || startId <= 0) return [];
-      const { lo, best } = await this._locateFrontier(startId, onStatus);
-      let moments;
-      if (best) {
-        if (onStatus) onStatus(`快速定位... 从 am${lo} 抓取最新一批`);
-        moments = (await api.crawlMoments(lo + 1, CONFIG.UP_CRAWL_TARGET, {
-          direction: "down",
-          skipFansOnly: true
-        })).moments;
-        if (!moments.some((m) => m._amId === best.amId)) {
-          moments.push({ ...best.raw, _amId: best.amId });
-        }
-      } else {
-        if (onStatus) onStatus(`快速定位... 从 am${startId} 逐号查找`);
-        moments = (await api.crawlMoments(startId, CONFIG.UP_CRAWL_TARGET, {
-          direction: "up",
-          skipFansOnly: true,
-          stopMs: CONFIG.UP_STOP_AT_MS
-        })).moments;
-      }
-      if (!moments.length) return [];
-      const records = await this._storeMoments(moments);
-      const frontier = best ? lo : Math.max(...records.map((r) => r.amId));
-      if (frontier > state.latestAmId) {
-        state.latestAmId = frontier;
-        utils.setLastAmId(frontier);
-      }
-      utils.setLastDiscoveryAt(Date.now());
-      utils.log(`快速定位: 边界 am${frontier}，入库 ${records.length} 条`);
-      return records;
-    },
-    // 探测收敛出边界：返回 lo（已确认存在动态的最高 am 号）与 best（该处动态原始数据）
-    async _locateFrontier(startId, onStatus) {
-      let anchor = this._newestAnchor();
-      let rate = this._estimateIdRate();
-      let lo = anchor ? Math.max(startId, anchor.id) : startId;
-      let hi = 0;
-      let step = CONFIG.FF_INITIAL_STEP;
-      let best = null;
-      for (let round = 0; round < CONFIG.FF_MAX_PROBES; round++) {
-        if (hi && hi - lo <= CONFIG.FF_CONVERGE_GAP) break;
-        let target;
-        if (hi) {
-          target = rate > 0 && anchor ? Math.round(anchor.id + anchor.ageMs * rate) : 0;
-          if (!(target > lo && target < hi)) target = Math.round((lo + hi) / 2);
-        } else if (anchor && rate > 0) {
-          target = Math.round(anchor.id + anchor.ageMs * rate);
-          if (target <= lo) target = lo + step;
-        } else {
-          target = lo + step;
-        }
-        if (onStatus) onStatus(`快速定位... 探测 am${target}`);
-        const hit = await this._probeWindow(target, this._probeSize(rate));
-        await new Promise((r) => setTimeout(r, CONFIG.CRAWL_BATCH_DELAY_MS));
-        if (!hit) {
-          if (rate > 0 || hi) {
-            hi = target;
-          } else {
-            step = Math.round(step / 2);
-            if (step < CONFIG.FF_MIN_STEP) hi = target;
-          }
-          continue;
-        }
-        if (hit.amId > lo) lo = hit.amId;
-        if (!best || hit.ageMs < best.ageMs) best = hit;
-        if (hit.ageMs <= CONFIG.UP_STOP_AT_MS) break;
-        if (anchor && hit.amId > anchor.id && anchor.ageMs > hit.ageMs) {
-          rate = (hit.amId - anchor.id) / (anchor.ageMs - hit.ageMs);
-        }
-        anchor = { id: hit.amId, ageMs: hit.ageMs };
-        if (rate <= 0) step *= CONFIG.FF_STEP_MULTIPLIER;
-      }
-      if (best && hi && hi - lo > 1) {
-        const rest = await this._probeWindow(lo + 1, Math.min(hi - lo - 1, CONFIG.FF_PROBE_MAX));
-        if (rest && rest.amId > lo) {
-          lo = rest.amId;
-          if (rest.ageMs < best.ageMs) best = rest;
-        }
-      }
-      return { lo, best };
-    },
-    // 采样一段连续 am 号，返回其中最新的公开动态；整段为空返回 null
-    async _probeWindow(fromId, size) {
-      const ids = [];
-      for (let i = 0; i < size; i++) ids.push(fromId + i);
-      const results = await Promise.all(ids.map((id) => api.fetchMoment(id)));
-      let best = null;
-      for (let i = 0; i < results.length; i++) {
-        const data = results[i];
-        if (!data || data.result !== 0 || !data.moment) continue;
-        if (data.moment.visibleForFans) continue;
-        const ageMs = utils.parseAgeMs(data.moment.createTime);
-        if (!best || ageMs < best.ageMs) best = { amId: ids[i], ageMs, raw: data };
-      }
-      return best;
-    },
-    // 采样宽度按速率换算成能覆盖 FF_PROBE_SPAN_MS 的 ID 数，速率未知时用最小宽度
-    _probeSize(rate) {
-      if (!(rate > 0)) return CONFIG.FF_PROBE_SIZE;
-      const n = Math.ceil(rate * CONFIG.FF_PROBE_SPAN_MS);
-      return Math.min(CONFIG.FF_PROBE_MAX, Math.max(CONFIG.FF_PROBE_SIZE, n));
-    },
-    // 本地最新动态作为时间锚点（am 号 → 距今毫秒）
-    _newestAnchor() {
-      for (const m of state.moments) {
-        if (m.absTs) return { id: m.amId, ageMs: Math.max(1, Date.now() - m.absTs) };
-      }
-      return null;
-    },
-    // 由本地记录估算 am 号增长速率：最新与最旧两条的号差 ÷ 时间差
-    _estimateIdRate() {
-      const ms = state.moments;
-      if (ms.length < 2) return 0;
-      const newest = ms[0];
-      const oldest = ms[ms.length - 1];
-      const dId = newest.amId - oldest.amId;
-      const dTs = newest.absTs - oldest.absTs;
-      if (!(dId > 0) || !(dTs > 0)) return 0;
-      return dId / dTs;
     },
     _upPollTick() {
       if (state._upRunning) return;
@@ -2040,58 +1926,45 @@
         const el = document.getElementById("up-status");
         if (el) el.textContent = t;
       };
-      updateUp("↑查找新动态...");
+      const backoffAndSettle = () => {
+        const lastDisc = utils.getLastDiscoveryAt();
+        const idleMs = lastDisc ? Date.now() - lastDisc : 0;
+        state._upBackoffMs = this._computeBackoff(idleMs);
+        state._upNextAt = Date.now() + state._upBackoffMs;
+      };
       try {
-        const fromId = Math.max(state.latestAmId, state._upProbedTo);
-        const { moments: newMoments, probedTo } = await api.crawlMoments(fromId, CONFIG.UP_CRAWL_TARGET, {
-          direction: "up",
-          skipFansOnly: true,
-          stopMs: CONFIG.UP_STOP_AT_MS
-        });
+        const page = await api.fetchFeedSquare();
         if (gen !== state._upGeneration) return;
-        if (probedTo > state._upProbedTo) {
-          state._upProbedTo = probedTo;
+        if (!page) {
+          updateUp("");
+          backoffAndSettle();
+          return;
         }
-        if (newMoments.length) {
-          const records = await this._storeMoments(newMoments);
-          const maxAm = Math.max(...records.map((r) => r.amId));
-          if (maxAm > state.latestAmId) {
-            state.latestAmId = maxAm;
-            utils.setLastAmId(maxAm);
-          }
-          updateUp(`↑发现 ${records.length} 条新动态，点击刷新`);
-          const now = Date.now();
-          utils.setLastDiscoveryAt(now);
+        if (page.records.length) {
+          await db.putMoments(page.records).catch(() => {
+          });
+        }
+        const maxAmId = page.records.length ? Math.max(...page.records.map((r) => r.amId)) : 0;
+        if (!state.latestAmId) {
+          state.latestAmId = maxAmId;
+          return;
+        }
+        const freshCount = page.records.filter((r) => r.amId > state.latestAmId).length;
+        if (freshCount) {
+          state.latestAmId = maxAmId;
+          utils.setLastDiscoveryAt(Date.now());
           state._upBackoffMs = 0;
           state._upNextAt = 0;
+          updateUp(`↑发现 ${freshCount} 条新动态，点击刷新`);
         } else {
           updateUp("");
-          const lastDisc = utils.getLastDiscoveryAt();
-          const idleMs = lastDisc ? Date.now() - lastDisc : 0;
-          state._upBackoffMs = this._computeBackoff(idleMs);
-          state._upNextAt = Date.now() + state._upBackoffMs;
+          backoffAndSettle();
         }
       } finally {
         if (gen === state._upGeneration) {
           state._upRunning = false;
         }
       }
-    },
-    async _storeMoments(moments) {
-      const records = [];
-      const now = Date.now();
-      for (const m of moments) {
-        const moment = m.moment || m;
-        const amId = parseInt(m._amId || moment.momentId);
-        if (!amId) continue;
-        if (moment.visibleForFans) continue;
-        const absTs = utils.computeAbsTs(moment.createTime, now);
-        records.push({ amId, absTs, data: moment, fetchedAt: now });
-      }
-      if (records.length) {
-        await db.putMoments(records);
-      }
-      return records;
     },
     // ========== 过期清理 ==========
     async cleanupExpired() {
@@ -2124,7 +1997,7 @@
         this.showPlazaView();
       }
     },
-    // 刷新广场（点击刷新时调用）：预渲染 DB 最新 20 条
+    // 刷新广场（点击刷新时调用）：重拉最新一页
     async refreshPlaza() {
       background._stopUpwardPoll();
       background._cancelRunningSearch();
@@ -2137,20 +2010,7 @@
       updateStatus("正在刷新...");
       state._downLoading = false;
       state._noMoreDown = false;
-      await this._loadAndRender(state.latestAmId + 1);
-      const newestTs = state.moments[0]?.absTs;
-      if (!newestTs || Date.now() - newestTs > CONFIG.FF_STALE_THRESHOLD_MS) {
-        updateStatus("数据较旧，快速定位最新动态...");
-        const ffRecords = await background._fastForward(
-          (t) => {
-            if (upStatus) upStatus.textContent = t;
-          }
-        );
-        if (ffRecords.length) {
-          await this._loadAndRender(state.latestAmId + 1);
-        }
-        if (upStatus) upStatus.textContent = "";
-      }
+      await this._loadFirstPage();
       background._startUpwardPoll();
       background.cleanupExpired();
     },
@@ -2158,27 +2018,8 @@
       const mainContent = document.querySelector(SEL_MAIN_FEEDS);
       if (!mainContent) return;
       renderer.getInteractiveHtml();
-      if (!state.latestAmId || state.latestAmId <= 0) {
-        mainContent.innerHTML = `
-                <div class="moment-plaza-container">
-                    <div class="plaza-setup-box">
-                        <h3 style="margin:0 0 12px;color:#333;">📌 首次使用</h3>
-                        <p style="color:#666;font-size:14px;margin-bottom:12px;">请粘贴一条动态链接来获取 am 号：</p>
-                        <p style="color:#999;font-size:12px;margin-bottom:16px;">示例：https://www.acfun.cn/moment/am5073277</p>
-                        <div style="display:flex;gap:8px;">
-                            <input id="plaza-link-input" type="text" placeholder="粘贴动态链接..." style="flex:1;height:36px;padding:0 10px;border:1px solid #e5e5e5;border-radius:4px;font-size:14px;outline:none;" />
-                            <button id="plaza-link-btn" style="height:36px;padding:0 20px;background:#fd4c5c;color:#fff;border:none;border-radius:4px;font-size:14px;cursor:pointer;">确定</button>
-                        </div>
-                        <div style="margin-top:16px;font-size:13px;color:#666;">保留
-                            <select id="plaza-setup-keep-days" style="border:1px solid #e5e5e5;border-radius:3px;padding:2px 4px;">${renderer.keepDaysOptionsHtml()}</select> 天内的数据
-                        </div>
-                    </div>
-                </div>
-            `;
-        this._bindSetupEvents(mainContent);
-        return;
-      }
       state.moments = [];
+      state._downCursor = "";
       mainContent.innerHTML = `
             <div class="moment-plaza-container">
                 ${renderer.renderToolbar()}
@@ -2198,47 +2039,40 @@
       this._bindKeepDaysSelect();
       const statusEl = document.getElementById("fetch-status");
       if (statusEl) statusEl.textContent = "正在加载...";
-      await this._loadAndRender(state.latestAmId + 1);
+      await this._loadFirstPage();
       background._startUpwardPoll();
       background.cleanupExpired();
     },
     // ========== 数据流核心 ==========
-    // 加载最新一批 → 渲染 → 状态文案 → 后台注入新鲜互动数字（refreshPlaza / showPlazaView 共用）
-    async _loadAndRender(fromId) {
-      const records = await this._loadBatch(fromId, CONFIG.BATCH_SIZE);
-      state.moments = records;
-      if (records.length) {
-        state.oldestAmId = Math.min(...records.map((r) => r.amId));
-        const oldestAbs = records[records.length - 1]?.absTs;
-        if (records.length < CONFIG.BATCH_SIZE || oldestAbs && Date.now() - oldestAbs > CONFIG.DOWN_STOP_AFTER_MS) {
-          state._noMoreDown = true;
-        }
+    // 拉广场最新一页 → 渲染 → 状态文案 → 后台注入新鲜互动数字（refreshPlaza / showPlazaView 共用）
+    async _loadFirstPage() {
+      const page = await api.fetchFeedSquare();
+      if (!page) {
+        const statusEl2 = document.getElementById("fetch-status");
+        if (statusEl2) statusEl2.textContent = "加载失败，点击重试";
+        return;
       }
+      state.moments = page.records;
+      state._downCursor = page.nextCursor;
+      if (page.noMore) state._noMoreDown = true;
+      this._markNoMoreIfPastWindow(page.records);
+      const maxAmId = page.records.length ? Math.max(...page.records.map((r) => r.amId)) : 0;
+      if (maxAmId > state.latestAmId) state.latestAmId = maxAmId;
+      utils.setLastDiscoveryAt(Date.now());
       this._renderList();
       const statusEl = document.getElementById("fetch-status");
       if (statusEl) statusEl.textContent = `共 ${state.moments.length} 条动态，向下滚动加载更多`;
-      await this._refreshRecords(records);
-    },
-    // 从库预渲染 count 条（amId < fromId），不足则实时抓取补足
-    async _loadBatch(fromId, count) {
-      let records = await db.getOlderThan(fromId, count);
-      if (records.length < count) {
-        const fetchFrom = records.length ? records[records.length - 1].amId : fromId;
-        const need = count - records.length;
-        const fetched = await this._fetchAndStoreDown(fetchFrom, need);
-        records = records.concat(fetched);
-        records.sort((a, b) => b.amId - a.amId);
-      }
-      return records;
-    },
-    // 实时抓取一批（跳过粉丝可见、>24h 停），存库并返回记录
-    async _fetchAndStoreDown(fromAmId, targetCount) {
-      const { moments } = await api.crawlMoments(fromAmId, targetCount, {
-        direction: "down",
-        skipFansOnly: true,
-        stopMs: CONFIG.DOWN_STOP_AFTER_MS
+      await db.putMoments(page.records).catch(() => {
       });
-      return background._storeMoments(moments);
+      await this._refreshRecords(page.records);
+    },
+    // 本批最旧一条已超过展示时间下限 → 标记无更多
+    _markNoMoreIfPastWindow(records) {
+      if (!records.length) return;
+      const oldestAbs = Math.min(...records.map((r) => r.absTs));
+      if (oldestAbs && Date.now() - oldestAbs > CONFIG.DOWN_STOP_AFTER_MS) {
+        state._noMoreDown = true;
+      }
     },
     // 对需要修复/注入的记录统一补抓一次，避免同一 amId 重复 fetchMoment
     async _refreshRecords(records) {
@@ -2289,37 +2123,6 @@
       const listEl = document.getElementById("moment-list");
       if (listEl) listEl.innerHTML = renderer.renderList(state.moments);
     },
-    // 首次使用：绑定链接输入 + 保留天数
-    _bindSetupEvents(mainContent) {
-      const input = document.getElementById("plaza-link-input");
-      const btn = document.getElementById("plaza-link-btn");
-      const keepDaysSel = document.getElementById("plaza-setup-keep-days");
-      if (keepDaysSel) {
-        keepDaysSel.addEventListener("change", (e) => {
-          utils.setKeepDays(parseInt(e.target.value) || CONFIG.KEEP_DAYS_DEFAULT);
-        });
-      }
-      if (!input || !btn) return;
-      const parseAndStart = () => {
-        if (keepDaysSel) {
-          utils.setKeepDays(parseInt(keepDaysSel.value) || CONFIG.KEEP_DAYS_DEFAULT);
-        }
-        const value = input.value.trim();
-        const match = value.match(/am(\d+)/);
-        if (!match) {
-          alert("无法解析链接，请确认格式正确\n示例：https://www.acfun.cn/moment/am5073277");
-          return;
-        }
-        const amId = parseInt(match[1]);
-        state.latestAmId = amId;
-        utils.setLastAmId(amId);
-        this.showPlazaView();
-      };
-      btn.addEventListener("click", parseAndStart);
-      input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") parseAndStart();
-      });
-    },
     _bindKeepDaysSelect() {
       const sel = document.getElementById("plaza-keep-days");
       if (!sel) return;
@@ -2347,15 +2150,10 @@
       };
       window.addEventListener("scroll", state._scrollHandler, { passive: true });
     },
-    // 触底向下加载：固定 20 条，库充足直接预渲染，不足实时抓取
+    // 触底向下加载：pcursor 续翻更旧的一页（每页固定 20 条），>24h 或翻到底即止
     async _fetchNextBatch() {
       if (state._downLoading || state._noMoreDown) return;
       if (!document.getElementById("moment-list")) return;
-      const fromId = state.oldestAmId;
-      if (!fromId || fromId <= 0) {
-        state._noMoreDown = true;
-        return;
-      }
       state._downLoading = true;
       const loadMoreEl = document.getElementById("load-more-status");
       if (loadMoreEl) {
@@ -2363,32 +2161,37 @@
         loadMoreEl.textContent = "加载中...";
       }
       try {
-        const cached = await db.getOlderThan(fromId, CONFIG.BATCH_SIZE);
-        let fetched = [];
-        const need = CONFIG.BATCH_SIZE - cached.length;
-        if (need > 0) {
-          const fetchFrom = cached.length ? cached[cached.length - 1].amId : fromId;
-          fetched = await this._fetchAndStoreDown(fetchFrom, need);
+        const page = await api.fetchFeedSquare(state._downCursor);
+        if (!page) {
+          if (loadMoreEl) {
+            loadMoreEl.className = "plaza-load-more";
+            loadMoreEl.textContent = "加载失败，滚动重试";
+          }
+          return;
         }
-        const merged = cached.concat(fetched).sort((a, b) => b.amId - a.amId);
+        state._downCursor = page.nextCursor;
+        if (page.noMore) state._noMoreDown = true;
         const existing = new Set(state.moments.map((m) => m.amId));
-        const newRecords = merged.filter((r) => !existing.has(r.amId));
-        if (!newRecords.length) {
+        const inWindow = page.records.filter((r) => {
+          if (existing.has(r.amId)) return false;
+          if (Date.now() - r.absTs > CONFIG.DOWN_STOP_AFTER_MS) {
+            state._noMoreDown = true;
+            return false;
+          }
+          return true;
+        });
+        if (!inWindow.length) {
           state._noMoreDown = true;
           if (loadMoreEl) {
             loadMoreEl.className = "plaza-load-more";
             loadMoreEl.textContent = "已加载全部动态";
           }
         } else {
-          state.moments.push(...newRecords);
-          state.oldestAmId = Math.min(...newRecords.map((r) => r.amId));
-          const fetchedShort = need > 0 && fetched.length < need;
-          const oldestAbs = newRecords[newRecords.length - 1]?.absTs;
-          if (fetchedShort || oldestAbs && Date.now() - oldestAbs > CONFIG.DOWN_STOP_AFTER_MS) {
-            state._noMoreDown = true;
-          }
+          state.moments.push(...inWindow);
           this._renderList();
-          await this._refreshRecords(newRecords);
+          await db.putMoments(inWindow).catch(() => {
+          });
+          await this._refreshRecords(inWindow);
           if (loadMoreEl) {
             loadMoreEl.className = "plaza-load-more";
             loadMoreEl.textContent = state._noMoreDown ? "已加载全部动态" : "";
@@ -2499,32 +2302,174 @@
     }
   };
 
+  // src/emotpanel.js
+  var RECENT_KEY = "plaza_emot_recent_v1";
+  var RECENT_LIMIT = 12;
+  var PREVIEW_W = 140;
+  var PREVIEW_H = 156;
+  function readRecent() {
+    try {
+      const ids = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]");
+      if (Array.isArray(ids)) return ids.map(String).filter(Boolean).slice(0, RECENT_LIMIT);
+    } catch (e) {
+    }
+    return [];
+  }
+  function rememberRecent(id) {
+    const ids = readRecent().filter((x) => x !== String(id));
+    ids.unshift(String(id));
+    try {
+      localStorage.setItem(RECENT_KEY, JSON.stringify(ids.slice(0, RECENT_LIMIT)));
+    } catch (e) {
+    }
+  }
+  function attrUrl(url) {
+    return String(url || "").replace(/"/g, "%22");
+  }
+  function itemHtml(item) {
+    return `<img class="plaza-emot-item" data-code="${item.id}" data-url="${attrUrl(item.url)}" data-big="${attrUrl(item.big || item.url)}" data-name="${utils.escapeHtml(item.name || "")}" src="${attrUrl(item.url)}" alt="" loading="lazy">`;
+  }
+  function viewPacks() {
+    const map = state.emoticonMap || {};
+    const recent = readRecent().map((id) => map[id] && { ...map[id], id }).filter(Boolean);
+    const packs = [];
+    if (recent.length) packs.push({ name: "最近使用", items: recent, virtual: true });
+    for (const p of state.emoticonPacks || []) packs.push({ name: p.name, items: p.items });
+    return packs;
+  }
+  function activePack(panel) {
+    const packs = viewPacks();
+    return packs.find((p) => p.name === panel.dataset.emotPack) || packs[0];
+  }
+  function buildPanel(panel) {
+    panel.innerHTML = `
+        <div class="plaza-emot-head"><span class="plaza-emot-pack-name"></span></div>
+        <div class="plaza-emot-grid"></div>
+        <div class="plaza-emot-foot">
+            <button type="button" class="plaza-emot-foot-page" data-dir="-1" title="上一个表情包">‹</button>
+            <div class="plaza-emot-strip"></div>
+            <button type="button" class="plaza-emot-foot-page" data-dir="1" title="更多表情包">›</button>
+        </div>
+    `;
+    const strip = panel.querySelector(".plaza-emot-strip");
+    strip.addEventListener("scroll", () => updateStripArrows(panel), { passive: true });
+  }
+  function updateStripArrows(panel) {
+    const strip = panel.querySelector(".plaza-emot-strip");
+    if (!strip) return;
+    const prev = panel.querySelector('.plaza-emot-foot-page[data-dir="-1"]');
+    const next = panel.querySelector('.plaza-emot-foot-page[data-dir="1"]');
+    if (prev) prev.style.visibility = strip.scrollLeft > 4 ? "visible" : "hidden";
+    if (next) next.style.visibility = strip.scrollWidth - strip.scrollLeft - strip.clientWidth > 4 ? "visible" : "hidden";
+  }
+  function renderHead(panel) {
+    const el = panel.querySelector(".plaza-emot-pack-name");
+    if (el) el.textContent = (activePack(panel) || {}).name || "";
+  }
+  function renderGrid(panel) {
+    const pkg = activePack(panel);
+    const gridEl = panel.querySelector(".plaza-emot-grid");
+    if (!gridEl || !pkg) return;
+    gridEl.innerHTML = pkg.items.map((it) => itemHtml(it)).join("");
+    gridEl.scrollTop = 0;
+  }
+  function renderStrip(panel) {
+    const strip = panel.querySelector(".plaza-emot-strip");
+    if (!strip) return;
+    const activeName = (activePack(panel) || {}).name;
+    strip.innerHTML = viewPacks().map(
+      (p) => `<button type="button" class="plaza-emot-pack-thumb${p.name === activeName ? " active" : ""}" data-name="${utils.escapeHtml(p.name)}" title="${utils.escapeHtml(p.name)}"><img src="${attrUrl(p.items[0] && p.items[0].url)}" alt="" loading="lazy"></button>`
+    ).join("");
+    strip.scrollLeft = 0;
+    updateStripArrows(panel);
+  }
+  function renderAll(panel) {
+    renderHead(panel);
+    renderGrid(panel);
+    renderStrip(panel);
+  }
+  var _previewEl = null;
+  function previewEl() {
+    if (!_previewEl || !_previewEl.parentNode) {
+      _previewEl = document.createElement("div");
+      _previewEl.className = "plaza-emot-preview";
+      _previewEl.innerHTML = '<img alt=""><span></span>';
+      document.body.appendChild(_previewEl);
+    }
+    return _previewEl;
+  }
+  var emotpanel = {
+    // 首次打开时构建面板；数据由 main.js 预取，这里兜底再拉一次
+    async ensure(panel) {
+      if (panel.dataset.loaded) return;
+      panel.innerHTML = '<div class="plaza-emot-empty">表情加载中…</div>';
+      const ok = await api.fetchEmoticonPacks();
+      if (!(state.emoticonPacks || []).length) {
+        panel.innerHTML = '<div class="plaza-emot-empty">表情加载失败（可能未登录）</div>';
+        if (ok) panel.dataset.loaded = "1";
+        return;
+      }
+      buildPanel(panel);
+      panel.dataset.loaded = "1";
+      renderAll(panel);
+    },
+    selectPack(panel, name) {
+      if (!viewPacks().some((p) => p.name === name)) return;
+      panel.dataset.emotPack = name;
+      renderAll(panel);
+    },
+    // 底部条 ‹/›：按 dir 翻一屏，方向由按钮提供，无内容侧的箭头已隐藏
+    scrollStrip(panel, dir) {
+      const strip = panel.querySelector(".plaza-emot-strip");
+      if (!strip) return;
+      strip.scrollBy({ left: (dir < 0 ? -1 : 1) * 200, behavior: "smooth" });
+    },
+    // 选中表情：记录最近使用，并同步所有已构建面板（仅正在看「最近使用」的刷新网格，其余只刷切换条，不打断滚动位置）
+    pick(code) {
+      if (!code) return;
+      rememberRecent(code);
+      this.refreshRecent();
+    },
+    refreshRecent() {
+      document.querySelectorAll(".plaza-emot-panel[data-loaded]").forEach((p) => {
+        renderStrip(p);
+        const active = activePack(p);
+        if (active && active.virtual) {
+          renderHead(p);
+          renderGrid(p);
+        }
+      });
+    },
+    showPreview(item) {
+      const el = previewEl();
+      el.querySelector("img").src = item.dataset.big || item.dataset.url || "";
+      el.querySelector("span").textContent = item.dataset.name || item.dataset.code || "";
+      el.classList.add("show");
+      const rect = item.getBoundingClientRect();
+      const left = Math.min(Math.max(8, rect.left + rect.width / 2 - PREVIEW_W / 2), window.innerWidth - PREVIEW_W - 8);
+      const top = rect.top >= PREVIEW_H + 12 ? rect.top - PREVIEW_H - 8 : Math.min(window.innerHeight - PREVIEW_H - 8, rect.bottom + 8);
+      el.style.left = left + "px";
+      el.style.top = Math.max(8, top) + "px";
+    },
+    hidePreview() {
+      if (_previewEl) _previewEl.classList.remove("show");
+    }
+  };
+
   // src/events.js
   var events = {
-    // 打开/收起表情面板；首次打开时拉取表情包数据并填充
+    // 打开/收起表情面板；首次打开时由 emotpanel 构建内容
     async toggleEmotPanel(panel) {
-      const willShow = panel.style.display === "none";
-      document.querySelectorAll(".plaza-emot-panel").forEach((p) => {
-        p.style.display = "none";
-      });
+      const willShow = !panel.classList.contains("open");
+      this.closeEmotPanels();
       if (!willShow) return;
-      panel.style.display = "";
-      if (panel.dataset.loaded) return;
-      await api.fetchEmoticonPacks();
-      const packs = state.emoticonPacks || [];
-      if (!packs.length) {
-        panel.innerHTML = '<div class="plaza-emot-empty">表情加载失败（可能未登录）</div>';
-      } else {
-        panel.innerHTML = packs.map((p) => `
-                <div class="plaza-emot-pack">
-                    <div class="plaza-emot-pack-name">${utils.escapeHtml(p.name)}</div>
-                    <div class="plaza-emot-grid">
-                        ${p.items.map((it) => `<img class="plaza-emot-item" data-code="${it.id}" data-pkg="${utils.escapeHtml(p.name)}" src="${it.url.replace(/"/g, "%22")}" alt="">`).join("")}
-                    </div>
-                </div>
-            `).join("");
-      }
-      panel.dataset.loaded = "1";
+      panel.classList.add("open");
+      await emotpanel.ensure(panel);
+      emotpanel.refreshRecent();
+    },
+    closeEmotPanels() {
+      document.querySelectorAll(".plaza-emot-panel").forEach((p) => p.classList.remove("open"));
+      emotpanel.hidePreview();
     },
     // 在 textarea 光标处插入文本
     _insertAtCursor(input, text) {
@@ -2537,9 +2482,7 @@
     bindAll() {
       document.addEventListener("click", async (e) => {
         if (!e.target.closest(".plaza-emot-panel") && !e.target.closest(".plaza-editor-emot")) {
-          document.querySelectorAll(".plaza-emot-panel").forEach((p) => {
-            p.style.display = "none";
-          });
+          this.closeEmotPanels();
         }
         if (!e.target.closest(".moment-plaza-container, .plaza-promotion")) return;
         const emotBtn = e.target.closest(".plaza-editor-emot");
@@ -2548,10 +2491,23 @@
           if (panel) this.toggleEmotPanel(panel);
           return;
         }
+        const packThumb = e.target.closest(".plaza-emot-pack-thumb");
+        if (packThumb) {
+          const panel = packThumb.closest(".plaza-emot-panel");
+          if (panel) emotpanel.selectPack(panel, packThumb.dataset.name);
+          return;
+        }
+        const footPage = e.target.closest(".plaza-emot-foot-page");
+        if (footPage) {
+          const panel = footPage.closest(".plaza-emot-panel");
+          if (panel) emotpanel.scrollStrip(panel, parseInt(footPage.dataset.dir, 10));
+          return;
+        }
         const emotItem = e.target.closest(".plaza-emot-item");
         if (emotItem) {
           const input = emotItem.closest(".plaza-comment-editor")?.querySelector(".plaza-editor-input");
           if (input) this._insertAtCursor(input, `[emot=acfun,${emotItem.dataset.code}/]`);
+          emotpanel.pick(emotItem.dataset.code);
           return;
         }
         const imgBtn = e.target.closest(".plaza-editor-img");
@@ -2784,6 +2740,15 @@
         pendingImg.src = url;
         pending.style.display = "flex";
       });
+      document.addEventListener("mouseover", (e) => {
+        const item = e.target.closest?.(".plaza-emot-item");
+        if (item && item.closest(".plaza-emot-panel.open")) emotpanel.showPreview(item);
+      });
+      document.addEventListener("mouseout", (e) => {
+        const item = e.target.closest?.(".plaza-emot-item");
+        if (item && !(e.relatedTarget && item.contains(e.relatedTarget))) emotpanel.hidePreview();
+      });
+      document.addEventListener("scroll", () => emotpanel.hidePreview(), true);
       document.addEventListener("keydown", async (e) => {
         if (e.key !== "Enter") return;
         const editor2 = e.target.closest?.(".plaza-editor-input");

@@ -6,19 +6,22 @@ let _apiToken = null;
 let _tokenExpiry = 0;
 let _emoticonPromise = null;
 
+// bigUrl 供面板悬停大图预览（原生页缓存里没有时退回小图），name 供预览标注
 function _applyEmoticons(flat) {
     const map = {};
     const packs = [];
     const byName = {};
     for (const u of flat) {
         if (!u || !u.emotionId || !u.emotionImageUrl) continue;
-        map[u.emotionId] = { url: u.emotionImageUrl, pkg: u.emotionPkgName || '' };
+        const big = u.emotionBigUrl || u.emotionImageUrl;
+        const name = u.emotionName || '';
+        map[u.emotionId] = { url: u.emotionImageUrl, big: big, name: name, pkg: u.emotionPkgName || '' };
         let pack = byName[u.emotionPkgName];
         if (!pack) {
             pack = byName[u.emotionPkgName] = { name: u.emotionPkgName || '表情', items: [] };
             packs.push(pack);
         }
-        pack.items.push({ id: u.emotionId, url: u.emotionImageUrl });
+        pack.items.push({ id: u.emotionId, url: u.emotionImageUrl, big: big, name: name });
     }
     state.emoticonMap = map;
     state.emoticonPacks = packs;
@@ -105,7 +108,18 @@ export const api = {
                                     || (it.smallImageInfo && it.smallImageInfo.thumbnailImageCdnUrl)
                                     || (it.smallImageInfo && it.smallImageInfo.thumbnailImage && it.smallImageInfo.thumbnailImage.cdnUrls && it.smallImageInfo.thumbnailImage.cdnUrls[0] && it.smallImageInfo.thumbnailImage.cdnUrls[0].url)
                                     || '';
-                                flat.push({ emotionId: it.id, emotionPkgName: p.name, emotionImageUrl: url });
+                                // emotionImageBigUrl 实测可能是字符串也可能是 [{url}]，两种都兜住
+                                const rawBig = (typeof it.emotionImageBigUrl === 'string' && it.emotionImageBigUrl)
+                                    || (it.bigImageInfo && it.bigImageInfo.thumbnailImageCdnUrl)
+                                    || (it.bigImageInfo && it.bigImageInfo.thumbnailImage && it.bigImageInfo.thumbnailImage.cdnUrls && it.bigImageInfo.thumbnailImage.cdnUrls[0] && it.bigImageInfo.thumbnailImage.cdnUrls[0].url)
+                                    || '';
+                                flat.push({
+                                    emotionId: it.id,
+                                    emotionPkgName: p.name,
+                                    emotionImageUrl: url,
+                                    emotionBigUrl: rawBig || url,
+                                    emotionName: (typeof it.name === 'string' && it.name) || ''
+                                });
                             }
                         }
                         _applyEmoticons(flat);
@@ -287,66 +301,58 @@ export const api = {
         });
     },
 
-    // 逐号并发探测动态（direction: 'up' 向上找新动态 / 'down' 向下找历史动态）
-    // opts: { skipFansOnly, stopMs }
-    //   up：遇到发布时间距今 ≤stopMs 的动态即停（该条保留）
-    //   down：遇到发布时间距今 >stopMs 的动态即停（该条丢弃）
-    // 返回 { moments, probedTo }：probedTo 为本次实际探测过的边界 am 号（up=最高号，down=最低号）
-    async crawlMoments(startId, targetCount = CONFIG.BATCH_SIZE, opts = {}) {
-        const up = opts.direction !== 'down';
-        const results = [];
-        let currentId = up ? startId + 1 : startId - 1;
-        let emptyCount = 0;
-        let totalChecked = 0;
-        const MAX_SCAN = targetCount * CONFIG.SCAN_LIMIT_MULTIPLIER;
+    // 拉取动态广场列表（APP 端接口，免登录，服务端已过滤粉丝可见，每页固定 20 条，不含转发）
+    // cursor 为空拉最新一页，否则按 pcursor 续翻更旧的一页；翻到底时 pcursor 返回 "no_more"
+    // 返回 { records: [{ amId, absTs, data, fetchedAt }], nextCursor, noMore }，请求失败返回 null
+    fetchFeedSquare(cursor = '') {
+        return new Promise((resolve) => {
+            const qs = cursor ? `?pcursor=${encodeURIComponent(cursor)}` : '';
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: `${CONFIG.FEED_SQUARE_API}${qs}`,
+                headers: { 'Accept': 'application/json' },
+                onload: (response) => {
+                    try {
+                        const data = JSON.parse(response.responseText);
+                        if (data.result !== 0 || !Array.isArray(data.feedList)) { resolve(null); return; }
+                        const now = Date.now();
+                        const records = data.feedList
+                            .filter(f => f.moment && f.moment.momentId && f.createTime)
+                            .map(f => this._squareFeedToRecord(f, now));
+                        const nextCursor = String(data.pcursor || '');
+                        resolve({ records, nextCursor, noMore: nextCursor === 'no_more' });
+                    } catch (e) { resolve(null); }
+                },
+                onerror: () => resolve(null)
+            });
+        });
+    },
 
-        while (results.length < targetCount && totalChecked < MAX_SCAN && currentId > 0) {
-            const room = targetCount - results.length;
-            const batchIds = [];
-            for (let i = 0; i < Math.min(CONFIG.CONCURRENT, room, up ? Infinity : currentId); i++) {
-                batchIds.push(up ? currentId + i : currentId - i);
-            }
-            totalChecked += batchIds.length;
-
-            const batchResults = await Promise.all(batchIds.map(amId =>
-                this.fetchMoment(amId).then(data => {
-                    if (data && data.result === 0 && data.moment) {
-                        const moment = data.moment;
-                        if (opts.skipFansOnly && moment.visibleForFans) {
-                            return { amId, fansOnly: true };
-                        }
-                        const ageMs = utils.parseAgeMs(moment.createTime);
-                        if (!up && opts.stopMs != null && ageMs > opts.stopMs) {
-                            return { amId, tooOld: true };
-                        }
-                        const hitFresh = up && opts.stopMs != null && ageMs <= opts.stopMs;
-                        return { amId, found: true, moment: data, hitFresh };
-                    }
-                    return { amId, found: false };
-                })
-            ));
-
-            let shouldStop = false;
-            for (const r of batchResults) {
-                // 粉丝可见也是真实存在的动态，不算空号（连片粉丝可见不会被误判为断层）
-                if (r.fansOnly) { emptyCount = 0; continue; }
-                if (r.tooOld) { shouldStop = true; break; }
-                if (r.found) {
-                    emptyCount = 0;
-                    results.push({ ...r.moment, _amId: r.amId });
-                    if (r.hitFresh) shouldStop = true;
-                } else {
-                    emptyCount++;
-                }
-            }
-            currentId += up ? batchIds.length : -batchIds.length;
-
-            if (shouldStop) { utils.log(up ? '向上爬到最新，停止' : '向下爬到时间下限，停止'); break; }
-            if (emptyCount >= CONFIG.MAX_EMPTY) { utils.log(`连续 ${emptyCount} 个空号，停止`); break; }
-            await new Promise(r => setTimeout(r, CONFIG.CRAWL_BATCH_DELAY_MS));
-        }
-
-        results.sort((a, b) => b._amId - a._amId);
-        return { moments: results, probedTo: up ? currentId - 1 : currentId + 1 };
+    // feedSquare 条目 → 本地记录格式：
+    // createTime 是绝对时间戳（毫秒），直接作 absTs；互动数字在 feed 顶层（moment 内无 likeCount）；
+    // 用户信息从 user/userInfo 映射成 moment/detail 的 user 结构供 renderer 使用
+    _squareFeedToRecord(feed, now) {
+        const moment = { ...feed.moment };
+        const u = feed.user || {};
+        const info = feed.userInfo || {};
+        moment.user = {
+            id: u.userId ?? info.id ?? '',
+            name: u.userName ?? info.name ?? '',
+            headUrl: u.userHead ?? info.headUrl ?? '',
+            headCdnUrls: info.headCdnUrls || (u.userHead ? [{ url: u.userHead }] : []),
+            nameColor: u.nameColor ?? info.nameColor,
+        };
+        moment.likeCount = feed.likeCount ?? 0;
+        moment.commentCount = feed.commentCount ?? moment.commentCount ?? 0;
+        moment.bananaCount = feed.bananaCount ?? moment.bananaCount ?? 0;
+        // 该接口不带登录态，互动状态不可信，展示时以 _refreshOneMoment 的 detail 刷新为准
+        moment.isLike = feed.isLike || false;
+        moment.isThrowBanana = feed.isThrowBanana || false;
+        return {
+            amId: parseInt(moment.momentId),
+            absTs: feed.createTime,
+            data: moment,
+            fetchedAt: now,
+        };
     }
 };

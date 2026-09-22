@@ -1,10 +1,10 @@
 # AcFun 动态广场
 
-油猴脚本，在 AcFun 个人中心添加「动态广场」功能，按 am 号查找动态并瀑布流展示，用 IndexedDB 做预加载缓存。
+油猴脚本，在 AcFun 个人中心添加「动态广场」功能，用官方 feedSquare 列表接口拉取全站最新动态瀑布流展示，用 IndexedDB 做数据留存。
 
 ## 开发与构建
 
-源码按模块拆分在 `src/` 下（config / state / utils / css / db / api / renderer / background / navigation / controller / events / main），用 esbuild 打包成单文件油猴脚本：
+源码按模块拆分在 `src/` 下（config / state / utils / css / db / api / emotpanel / renderer / background / navigation / controller / events / main），用 esbuild 打包成单文件油猴脚本：
 
 ```bash
 nvm use 24 && npm install
@@ -18,17 +18,39 @@ npm run watch    # 监听 src/ 变更自动重建
 
 ## 功能特性
 
-- 按 am 号查找动态，向上/向下每次固定加载 20 条
-- IndexedDB 本地缓存：预渲染固定内容，赞/评/投蕉数字加载后注入
-- 向上后台定时爬取，命中新动态或空手而归时按退避策略调整间隔
-- 向下触底懒加载，持续爬到「发布 >24 小时」的动态为止
-- 发布 ≤3 小时的动态互动数字显示加载动画并后台刷新，>3 小时直接用缓存
-- 评论、回复评论支持表情面板与本地上传图片
+- 基于 feedSquare 列表接口：进入即拉最新一页，触底按 pcursor 续翻更旧一页（每页固定 20 条）
+- 向下翻到「发布 >24 小时」的动态为止；feedSquare 服务端已过滤粉丝可见
+- 向上后台定时轮询最新一页，发现新动态提示刷新，空手而归按退避策略调整间隔
+- 发布 ≤3 小时的动态互动数字显示加载动画并用 `moment/detail` 后台刷新，>3 小时直接用列表快照
+- 评论、回复评论支持表情面板与本地上传图片；表情面板对齐原生样式（底部包切换条），含最近使用（本地记 12 个）、悬停大图预览与图片懒加载
+- 评论区对齐原生：赞/回复按钮用原生 13px SVG 图标（含红态）、楼中楼用户名内联彩色、间距与原生一致；头像框（avatarFrameImgInfo）以覆盖层渲染
 - 楼中楼回复显示「回复 @用户名 :」前缀（与原生一致）
 - 点赞、投蕉、评论、回复评论、评论点赞/取消赞
 - @提及、#话题#、ac号 自动转可点击链接
-- 转发动态渲染内容卡片（视频/文章/漫画：封面 + 标题 + 原作者，可点击跳转）
 - 数据库保留天数可调（1-7 天），超期自动清除
+
+> v3.3.0 起数据源为 feedSquare，该接口只返回纯动态（实测 1000 条样本 resourceType 全为 10），**转发动态不再出现在广场中**；旧版逐号探测方案已移除。
+
+## 数据源与原理
+
+### feedSquare 列表接口（核心数据源）
+
+```
+GET https://api-new.app.acfun.cn/rest/app/feed/feedSquare?pcursor={cursor}
+```
+
+- 免登录、免 header，单页固定 20 条（`Num` 参数无效），按发布时间降序
+- `pcursor` 是分页游标：首页不传，后续传上一次响应的 `pcursor`；翻到底返回 `"no_more"`
+- 游标是 `时间戳:时间戳` 格式，实测手工构造可跳到任意时间点
+- 历史深度实测约 53~54 小时，远超「展示 24 小时」的需求
+- 服务端已过滤粉丝可见动态；不含转发动态；`isLike`/`isThrowBanana` 不带登录态恒为 false（互动状态以 `moment/detail` 刷新为准）
+- **`createTime` 直接是绝对时间戳（毫秒）**，无需反推
+
+feed 顶层的互动数字（`likeCount`/`commentCount`/`bananaCount`）与用户信息（`user`/`userInfo`）由 `_squareFeedToRecord` 映射成 `moment/detail` 的记录结构（`absTs = createTime`），渲染层无需感知数据来源。
+
+### 单条动态接口（互动刷新用）
+
+`moment/detail` 保留两个用途：新鲜动态（≤3h）的互动数字注入（带 cookie 可得真实 `isLike`）、评论展开时的单条刷新。其 `createTime` 仍可能是相对字符串（如 `"13小时前"`），`computeAbsTs` 作为兜底反推。
 
 ## 数据存储（IndexedDB）
 
@@ -37,73 +59,45 @@ npm run watch    # 监听 src/ 变更自动重建
 - **store `moments`**：key = `amId`（数字），value 结构：
   ```javascript
   {
-    amId: 5073277,        // am 号（坐标）
+    amId: 5073277,        // am 号
     absTs: 1720000000000, // 绝对发布时间戳（毫秒）
-    data: { ... },        // moment/detail 接口返回的完整数据
-    fetchedAt: 1720000000000 // 首次抓取时刻
+    data: { ... },        // feedSquare/detail 接口返回的动态数据
+    fetchedAt: 1720000000000 // 抓取时刻
   }
   ```
-  另建有 `by_absTs` 索引，用于范围删除过期数据和查最新发布时间。
+  另建有 `by_absTs` 索引，用于范围删除过期数据。
+
+展示数据流直接走接口实时渲染，IndexedDB 仅作留存（写入 + 按保留天数清理 + 单条更新），不再作为渲染数据源。
 
 另有通过 `GM_setValue` 持久化的轻量配置（不存动态数据）：
 
 | Key | 说明 |
 |-----|------|
-| `moment_plaza_last_am` | 已知最大 am 号（向上探测的坐标） |
 | `moment_plaza_keep_days` | 数据库保留天数（1-7，默认 3） |
-
-## 绝对时间戳
-
-`moment/detail` 接口的 `createTime` 在大多数情况下是相对字符串（如 `"13小时前"`），少数场景会返回标准时间。脚本会先尝试按标准时间解析，再回退到相对时长，统一用「抓取时刻 − 已发布时长」反推绝对时间戳，并在**首次抓取时固化**：
-
-```javascript
-absTs = fetchedAt - parseAgeMs(createTime)
-```
-
-展示时间时用 `absTs` 动态计算（避免缓存里的相对时间字符串过期失真）。
-
-> 关键原则：**am 号只是查找动态的坐标**（不连续、有空洞），判断「是否最新 / 是否落后」一律参考绝对时间戳。
-
-## 预渲染与加载动画
-
-加载界面时（刷新 / 触底 / 进入广场），优先从 IndexedDB 读数据预渲染：
-
-- **固定内容**（文本、图片、用户信息、am 号）：直接从库拉取，秒出。
-- **可变数据**（赞 / 评 / 投蕉数字）：
-  - 发布 **≤3 小时**：显示 `· → ·· → ···` 加载动画，后台 `fetchMoment` 拉取最新后注入数字。
-  - 发布 **>3 小时**：直接采用库里的快照数据，不额外请求。
-- 点击评论时，单独触发该条评论请求更新（单条请求）。
+| `moment_plaza_last_discovery` | 最近一次发现新动态的时间戳（计算初始退避间隔） |
+| `moment_plaza_auto_enter` | 跳转 feeds 页后自动进入广场的标记 |
 
 ## 爬取策略
 
-### 向上（后台定时）
+### 向上（后台定时发现新动态）
 
-- 定时器（`UP_POLL_INTERVAL`，默认 60s）从 `last_am + 1` 向上探测新动态。
-- 命中新动态时把结果存库 + 更新 `last_am`，轮询间隔立即复位到 60s。
-- 空手而归时退避翻倍：60s → 120s → 240s → 480s → 封顶 10 分钟，减少夜间空探测。
-- 爬到「发布 ≤1 小时」的动态即停止（说明已够新），之后靠用户点击刷新展示最新。
-- am 号存在空号断层，会话内记录已探测边界 `_upProbedTo`，断层分多次逐步跨过。
+- 定时器（`UP_POLL_INTERVAL`，默认 60s）拉一次 feedSquare 第一页。
+- 与会话内已知的最大 am 号 diff，出现更大号 → 入库 + 更新基准 + 提示「↑发现 N 条新动态，点击刷新」，退避复位。
+- 无新动态时按退避翻倍：60s → 120s → 240s → 480s → 封顶 10 分钟，减少夜间空探测。
+- 接口失败与空手而归同样走退避；`lastDiscoveryAt` 持久化，页面刷新后按离线时长计算初始退避。
 
-### 向下（触底触发）
+### 向下（触底翻页）
 
-- 仅由滚动到底触发，每次固定加载 20 条。
-- 数据库充足 → 直接取库预渲染；不足 → 实时抓取补足（原来的逐个探测）。
-- 持续爬到「发布 >24 小时」的动态为止，之后标记无更多。
-
-### 粉丝可见跳过
-
-`visibleForFans === true` 的动态在爬取时直接跳过，不存库、不展示，但视为真实存在的动态（重置空号计数，避免连片粉丝可见被误判为空号断层）。
+- 仅由滚动到底触发，用 `state._downCursor` 续翻更旧一页（固定 20 条）。
+- 过滤已在列表中的 amId 与「发布 >24 小时」的记录；翻到 `no_more` 或越过 24h 下限即标记无更多。
+- 翻页失败不置「无更多」，下次触底自动重试。
 
 ### 参数配置
 
 ```javascript
 CONFIG = {
-    CONCURRENT: 10,        // 并发请求数
-    MAX_EMPTY: 30,         // 连续空号上限
-    BATCH_SIZE: 20,        // 向上/向下每次固定加载条数
     FRESH_WINDOW_MS: 3h,   // ≤3h 启用加载动画
-    UP_STOP_AT_MS: 1h,     // 向上爬到 ≤1h 停
-    DOWN_STOP_AFTER_MS: 24h, // 向下爬到 >24h 停
+    DOWN_STOP_AFTER_MS: 24h, // 向下翻到 >24h 停
     UP_POLL_INTERVAL: 60s, // 向上轮询基准间隔（空手而归翻倍，封顶 10 分钟）
     KEEP_DAYS_DEFAULT: 3,  // 默认保留天数
 }
@@ -111,10 +105,52 @@ CONFIG = {
 
 ## 保留天数
 
-- 数据库默认保留 3 天，可在首次设置框或广场工具栏的下拉框调整为 1-7 天。
+- 数据库默认保留 3 天，可在广场工具栏的下拉框调整为 1-7 天（首次设置框已随旧方案移除）。
 - 超期的动态按 `absTs` 自动清除（启动时 + 定时执行）。
 
 ## API 接口
+
+### feedSquare 列表（数据源）
+
+```
+GET https://api-new.app.acfun.cn/rest/app/feed/feedSquare?pcursor={cursor}
+```
+
+**响应字段（节选）：**
+```json
+{
+  "result": 0,
+  "pcursor": "1790086372216:1790085315795",
+  "feedList": [
+    {
+      "resourceType": 10,
+      "createTime": 1790086372215,
+      "likeCount": 7,
+      "commentCount": 5,
+      "bananaCount": 6,
+      "isLike": false,
+      "isThrowBanana": false,
+      "user": { "userId": 73324359, "userName": "用户名", "userHead": "头像URL", "nameColor": 2 },
+      "moment": {
+        "momentId": "5093540",
+        "text": "动态文字内容（含UBB表情 [emot=acfun,1673/]）",
+        "replaceUbbText": "...",
+        "visibleForFans": false,
+        "originResourceType": 0,
+        "imgs": [
+          { "url": "缩略图", "originUrl": "原图", "width": 2400, "height": 1080 }
+        ]
+      }
+    }
+  ]
+}
+```
+
+**注意事项：**
+- `createTime` 是绝对时间戳（毫秒），不是相对时间字符串
+- 互动数字在 feed 顶层，`moment` 内没有 `likeCount`
+- `pcursor` 返回 `"no_more"` 表示翻到底；首页请求不传 `pcursor`
+- 单页固定 20 条，`Num` 参数无效
 
 ### 获取单条动态
 
@@ -355,6 +391,7 @@ body: sourceId={am号}&sourceType=4&commentId={评论ID}
 油猴脚本需要的 `@connect`：
 ```
 @connect      www.acfun.cn
+@connect      api-new.app.acfun.cn
 @connect      id.app.acfun.cn
 @connect      kuaishouzt.com
 ```
@@ -365,9 +402,47 @@ body: sourceId={am号}&sourceType=4&commentId={评论ID}
 @match        https://www.acfun.cn/member*
 ```
 
-- `/member*`：注入侧边栏 + 后台定时向上爬取
+- `/member*`：注入侧边栏 + 后台定时拉最新动态
 
 ## 更新日志
+
+### v3.4.0 (2026-09-23)
+
+**表情面板展示层重构 + 评论区对齐原生（数据链路不变）：**
+
+**表情面板（对齐原生评论框表情面板）：**
+
+- 布局改为原生三段式：顶部当前包名、中间 6 列大格子网格（56px 格，独立滚动）、底部灰底包切换条（36px 包缩略图，选中放大到 46px；两端 ‹/› 箭头按滚动位置显隐，各翻一屏）
+- 包切换从「所有包竖向堆叠靠滚动翻找」改为单包渲染 + 底部缩略图切换；选中包按包名记忆（不受「最近使用」虚拟包插入影响）
+- 最近使用：选中表情记入 localStorage（`plaza_emot_recent_v1`，最多 12 个），作为切换条首个虚拟包展示，多个评论框间同步
+- 悬停大图预览：悬停显示 120px 大图 + 表情名（大图取 `emotionImageBigUrl`，原生页缓存无大图时退回小图）
+- 图片懒加载：网格与包缩略图均 `loading="lazy"`，不再打开面板即全量请求
+- 面板结构改为「头部固定 + 网格区独立滚动 + 底部固定」，新增 `src/emotpanel.js` 模块承载面板逻辑
+- 网络失败时不再把面板标记为已加载，下次打开自动重试
+
+**评论区（对照原生 moment 页逐项校正）：**
+
+- 赞/回复按钮改用原生 13px SVG 图标（base64 抄自原生页），灰色/悬停红/已赞红三态齐全；补上点击点赞后的 `[active]` 红色态
+- 楼中楼用户名不再强制 #333，与根评论一样按 nameColor 内联彩色（红/紫）
+- 间距对齐原生：用户名右距 2px、「发表于」右距 0、楼中楼行去掉左右 10px 内缩（头像贴灰底左缘、文字从 40px 起）
+- 头像框：评论数据带 `avatarFrameImgInfo` 时在头像上渲染覆盖层（`.plaza-avatar-frame`，80x70 居中略上移），机制同原生 avatar-bg；楼中楼不展示头像框（同原生）
+- 去掉自创的红色「UP主」tag：原生没有的元素不加
+- 评论项补上原生就有的 `data-commentid` / `data-userid` 属性，AcFun-Web-IP 等基于原生评论 DOM 的脚本可直接在广场生效
+
+### v3.3.0 (2026-09-22)
+
+**重构：数据源从「逐号探测」切换为官方 feedSquare 列表接口**
+
+- 新增 `fetchFeedSquare`：免登录列表接口，单请求拿 20 条动态，pcursor 链式翻页（实测无页数限制、零重复），`createTime` 直接是绝对时间戳
+- 删除整套逐号探测引擎：`crawlMoments`、并发探测、空号断层处理、粉丝可见跳过、`MAX_EMPTY`/`SCAN_LIMIT_MULTIPLIER` 等配置
+- 删除 v3.2.8/3.2.9 的快速定位算法（`_fastForward`/`_locateFrontier` 速率外推/探针收敛）：拉第一页即最新，无需定位边界
+- 向上轮询改为「拉第一页 + diff 最大 am 号」，退避策略保留
+- 向下翻页改为 pcursor 续翻；翻到 `no_more` 或越过 24h 展示下限即止
+- 删除首次使用设置框与 `moment_plaza_last_am`：feedSquare 无需 am 号起点，装完即用
+- IndexedDB 不再作为渲染数据源（接口单页 <500ms），仅作留存与清理
+- 请求量降 95%+（原先抓 20 条需 20~100 个 detail 请求，现在 1 个）
+- **行为变化：feedSquare 只返回纯动态（实测 1000 条样本无转发），广场不再展示转发动态**；历史深度依赖接口的 ~53h 缓存（>24h 展示需求仍有 2 倍余量）
+- 互动状态（isLike 等）feedSquare 不带登录态不可信，仍由 `moment/detail` 的 `_refreshOneMoment` 管线刷新（≤3h 新鲜动态）
 
 ### v3.2.9 (2026-09-12)
 

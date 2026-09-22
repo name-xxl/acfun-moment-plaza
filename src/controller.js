@@ -29,7 +29,7 @@ export const controller = {
         }
     },
 
-    // 刷新广场（点击刷新时调用）：预渲染 DB 最新 20 条
+    // 刷新广场（点击刷新时调用）：重拉最新一页
     async refreshPlaza() {
         background._stopUpwardPoll();
         background._cancelRunningSearch();
@@ -43,20 +43,7 @@ export const controller = {
         state._downLoading = false;
         state._noMoreDown = false;
 
-        await this._loadAndRender(state.latestAmId + 1);
-
-        // 数据较旧 → 指数跳跃快速定位最新动态
-        const newestTs = state.moments[0]?.absTs;
-        if (!newestTs || (Date.now() - newestTs) > CONFIG.FF_STALE_THRESHOLD_MS) {
-            updateStatus('数据较旧，快速定位最新动态...');
-            const ffRecords = await background._fastForward(
-                (t) => { if (upStatus) upStatus.textContent = t; }
-            );
-            if (ffRecords.length) {
-                await this._loadAndRender(state.latestAmId + 1);
-            }
-            if (upStatus) upStatus.textContent = '';
-        }
+        await this._loadFirstPage();
 
         background._startUpwardPoll();
         background.cleanupExpired();
@@ -68,29 +55,8 @@ export const controller = {
 
         renderer.getInteractiveHtml();
 
-        // 没有 am 号 → 首次设置框
-        if (!state.latestAmId || state.latestAmId <= 0) {
-            mainContent.innerHTML = `
-                <div class="moment-plaza-container">
-                    <div class="plaza-setup-box">
-                        <h3 style="margin:0 0 12px;color:#333;">📌 首次使用</h3>
-                        <p style="color:#666;font-size:14px;margin-bottom:12px;">请粘贴一条动态链接来获取 am 号：</p>
-                        <p style="color:#999;font-size:12px;margin-bottom:16px;">示例：https://www.acfun.cn/moment/am5073277</p>
-                        <div style="display:flex;gap:8px;">
-                            <input id="plaza-link-input" type="text" placeholder="粘贴动态链接..." style="flex:1;height:36px;padding:0 10px;border:1px solid #e5e5e5;border-radius:4px;font-size:14px;outline:none;" />
-                            <button id="plaza-link-btn" style="height:36px;padding:0 20px;background:#fd4c5c;color:#fff;border:none;border-radius:4px;font-size:14px;cursor:pointer;">确定</button>
-                        </div>
-                        <div style="margin-top:16px;font-size:13px;color:#666;">保留
-                            <select id="plaza-setup-keep-days" style="border:1px solid #e5e5e5;border-radius:3px;padding:2px 4px;">${renderer.keepDaysOptionsHtml()}</select> 天内的数据
-                        </div>
-                    </div>
-                </div>
-            `;
-            this._bindSetupEvents(mainContent);
-            return;
-        }
-
         state.moments = [];
+        state._downCursor = '';
         mainContent.innerHTML = `
             <div class="moment-plaza-container">
                 ${renderer.renderToolbar()}
@@ -113,54 +79,47 @@ export const controller = {
         const statusEl = document.getElementById('fetch-status');
         if (statusEl) statusEl.textContent = '正在加载...';
 
-        await this._loadAndRender(state.latestAmId + 1);
+        await this._loadFirstPage();
 
         background._startUpwardPoll();
         background.cleanupExpired();
     },
 
     // ========== 数据流核心 ==========
-    // 加载最新一批 → 渲染 → 状态文案 → 后台注入新鲜互动数字（refreshPlaza / showPlazaView 共用）
-    async _loadAndRender(fromId) {
-        const records = await this._loadBatch(fromId, CONFIG.BATCH_SIZE);
-
-        state.moments = records;
-        if (records.length) {
-            state.oldestAmId = Math.min(...records.map(r => r.amId));
-            const oldestAbs = records[records.length - 1]?.absTs;
-            if (records.length < CONFIG.BATCH_SIZE || (oldestAbs && (Date.now() - oldestAbs) > CONFIG.DOWN_STOP_AFTER_MS)) {
-                state._noMoreDown = true;
-            }
+    // 拉广场最新一页 → 渲染 → 状态文案 → 后台注入新鲜互动数字（refreshPlaza / showPlazaView 共用）
+    async _loadFirstPage() {
+        const page = await api.fetchFeedSquare();
+        if (!page) {
+            const statusEl = document.getElementById('fetch-status');
+            if (statusEl) statusEl.textContent = '加载失败，点击重试';
+            return;
         }
-        this._renderList();
 
+        state.moments = page.records;
+        state._downCursor = page.nextCursor;
+        if (page.noMore) state._noMoreDown = true;
+        this._markNoMoreIfPastWindow(page.records);
+
+        // 已展示到的最大号即轮询 diff 基准，避免把用户刚刷新看过的动态误报为新发现
+        const maxAmId = page.records.length ? Math.max(...page.records.map(r => r.amId)) : 0;
+        if (maxAmId > state.latestAmId) state.latestAmId = maxAmId;
+        utils.setLastDiscoveryAt(Date.now());
+
+        this._renderList();
         const statusEl = document.getElementById('fetch-status');
         if (statusEl) statusEl.textContent = `共 ${state.moments.length} 条动态，向下滚动加载更多`;
 
-        await this._refreshRecords(records);
+        await db.putMoments(page.records).catch(() => {});
+        await this._refreshRecords(page.records);
     },
 
-    // 从库预渲染 count 条（amId < fromId），不足则实时抓取补足
-    async _loadBatch(fromId, count) {
-        let records = await db.getOlderThan(fromId, count);
-        if (records.length < count) {
-            const fetchFrom = records.length ? records[records.length - 1].amId : fromId;
-            const need = count - records.length;
-            const fetched = await this._fetchAndStoreDown(fetchFrom, need);
-            records = records.concat(fetched);
-            records.sort((a, b) => b.amId - a.amId);
+    // 本批最旧一条已超过展示时间下限 → 标记无更多
+    _markNoMoreIfPastWindow(records) {
+        if (!records.length) return;
+        const oldestAbs = Math.min(...records.map(r => r.absTs));
+        if (oldestAbs && (Date.now() - oldestAbs) > CONFIG.DOWN_STOP_AFTER_MS) {
+            state._noMoreDown = true;
         }
-        return records;
-    },
-
-    // 实时抓取一批（跳过粉丝可见、>24h 停），存库并返回记录
-    async _fetchAndStoreDown(fromAmId, targetCount) {
-        const { moments } = await api.crawlMoments(fromAmId, targetCount, {
-            direction: 'down',
-            skipFansOnly: true,
-            stopMs: CONFIG.DOWN_STOP_AFTER_MS
-        });
-        return background._storeMoments(moments);
     },
 
     // 对需要修复/注入的记录统一补抓一次，避免同一 amId 重复 fetchMoment
@@ -219,42 +178,6 @@ export const controller = {
         if (listEl) listEl.innerHTML = renderer.renderList(state.moments);
     },
 
-    // 首次使用：绑定链接输入 + 保留天数
-    _bindSetupEvents(mainContent) {
-        const input = document.getElementById('plaza-link-input');
-        const btn = document.getElementById('plaza-link-btn');
-        const keepDaysSel = document.getElementById('plaza-setup-keep-days');
-
-        if (keepDaysSel) {
-            keepDaysSel.addEventListener('change', (e) => {
-                utils.setKeepDays(parseInt(e.target.value) || CONFIG.KEEP_DAYS_DEFAULT);
-            });
-        }
-
-        if (!input || !btn) return;
-
-        const parseAndStart = () => {
-            if (keepDaysSel) {
-                utils.setKeepDays(parseInt(keepDaysSel.value) || CONFIG.KEEP_DAYS_DEFAULT);
-            }
-            const value = input.value.trim();
-            const match = value.match(/am(\d+)/);
-            if (!match) {
-                alert('无法解析链接，请确认格式正确\n示例：https://www.acfun.cn/moment/am5073277');
-                return;
-            }
-            const amId = parseInt(match[1]);
-            state.latestAmId = amId;
-            utils.setLastAmId(amId);
-            this.showPlazaView();
-        };
-
-        btn.addEventListener('click', parseAndStart);
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') parseAndStart();
-        });
-    },
-
     _bindKeepDaysSelect() {
         const sel = document.getElementById('plaza-keep-days');
         if (!sel) return;
@@ -288,16 +211,10 @@ export const controller = {
         window.addEventListener('scroll', state._scrollHandler, { passive: true });
     },
 
-    // 触底向下加载：固定 20 条，库充足直接预渲染，不足实时抓取
+    // 触底向下加载：pcursor 续翻更旧的一页（每页固定 20 条），>24h 或翻到底即止
     async _fetchNextBatch() {
         if (state._downLoading || state._noMoreDown) return;
         if (!document.getElementById('moment-list')) return;
-
-        const fromId = state.oldestAmId;
-        if (!fromId || fromId <= 0) {
-            state._noMoreDown = true;
-            return;
-        }
 
         state._downLoading = true;
         const loadMoreEl = document.getElementById('load-more-status');
@@ -307,37 +224,40 @@ export const controller = {
         }
 
         try {
-            const cached = await db.getOlderThan(fromId, CONFIG.BATCH_SIZE);
-            let fetched = [];
-            const need = CONFIG.BATCH_SIZE - cached.length;
-            if (need > 0) {
-                const fetchFrom = cached.length ? cached[cached.length - 1].amId : fromId;
-                fetched = await this._fetchAndStoreDown(fetchFrom, need);
+            const page = await api.fetchFeedSquare(state._downCursor);
+            if (!page) {
+                // 不置 noMoreDown，下次触底自动重试
+                if (loadMoreEl) {
+                    loadMoreEl.className = 'plaza-load-more';
+                    loadMoreEl.textContent = '加载失败，滚动重试';
+                }
+                return;
             }
 
-            const merged = cached.concat(fetched).sort((a, b) => b.amId - a.amId);
-            const existing = new Set(state.moments.map(m => m.amId));
-            const newRecords = merged.filter(r => !existing.has(r.amId));
+            state._downCursor = page.nextCursor;
+            if (page.noMore) state._noMoreDown = true;
 
-            if (!newRecords.length) {
+            const existing = new Set(state.moments.map(m => m.amId));
+            const inWindow = page.records.filter(r => {
+                if (existing.has(r.amId)) return false;
+                if ((Date.now() - r.absTs) > CONFIG.DOWN_STOP_AFTER_MS) {
+                    state._noMoreDown = true;
+                    return false;
+                }
+                return true;
+            });
+
+            if (!inWindow.length) {
                 state._noMoreDown = true;
                 if (loadMoreEl) {
                     loadMoreEl.className = 'plaza-load-more';
                     loadMoreEl.textContent = '已加载全部动态';
                 }
             } else {
-                state.moments.push(...newRecords);
-                state.oldestAmId = Math.min(...newRecords.map(r => r.amId));
-
-                // 实时抓取补不齐，或最旧一条已 >24h → 向下到底
-                const fetchedShort = need > 0 && fetched.length < need;
-                const oldestAbs = newRecords[newRecords.length - 1]?.absTs;
-                if (fetchedShort || (oldestAbs && (Date.now() - oldestAbs) > CONFIG.DOWN_STOP_AFTER_MS)) {
-                    state._noMoreDown = true;
-                }
-
+                state.moments.push(...inWindow);
                 this._renderList();
-                await this._refreshRecords(newRecords);
+                await db.putMoments(inWindow).catch(() => {});
+                await this._refreshRecords(inWindow);
 
                 if (loadMoreEl) {
                     loadMoreEl.className = 'plaza-load-more';

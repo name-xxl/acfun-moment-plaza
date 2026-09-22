@@ -28,7 +28,7 @@ export const editor = {
                     <input type="file" class="${EDITOR_FILE_CLASS}" accept="image/*" style="display:none;">
                     <button class="${EDITOR_SEND_CLASS}" data-am-id="${amId}"${replyAttr}>${utils.escapeHtml(buttonText)}</button>
                 </div>
-                <div class="${EDITOR_PANEL_CLASS}" style="display:none;"></div>
+                <div class="${EDITOR_PANEL_CLASS}"></div>
             </div>
         `;
     }

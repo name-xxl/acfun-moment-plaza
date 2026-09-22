@@ -3,34 +3,25 @@ import { state } from './state.js';
 import { api } from './api.js';
 import { renderer, COUNT_SUFFIX } from './renderer.js';
 import { controller } from './controller.js';
-import { utils } from './utils.js';
+import { emotpanel } from './emotpanel.js';
 
 // 全局事件委托。广场 DOM 不存在时所有分支都会空跑返回，
 // 因此在 /member 页初始化时绑定一次即可（等价于原先每次进入广场时绑定）。
 export const events = {
-    // 打开/收起表情面板；首次打开时拉取表情包数据并填充
+    // 打开/收起表情面板；首次打开时由 emotpanel 构建内容
     async toggleEmotPanel(panel) {
-        const willShow = panel.style.display === 'none';
-        document.querySelectorAll('.plaza-emot-panel').forEach(p => { p.style.display = 'none'; });
+        const willShow = !panel.classList.contains('open');
+        this.closeEmotPanels();
         if (!willShow) return;
 
-        panel.style.display = '';
-        if (panel.dataset.loaded) return;
-        await api.fetchEmoticonPacks();
-        const packs = state.emoticonPacks || [];
-        if (!packs.length) {
-            panel.innerHTML = '<div class="plaza-emot-empty">表情加载失败（可能未登录）</div>';
-        } else {
-            panel.innerHTML = packs.map(p => `
-                <div class="plaza-emot-pack">
-                    <div class="plaza-emot-pack-name">${utils.escapeHtml(p.name)}</div>
-                    <div class="plaza-emot-grid">
-                        ${p.items.map(it => `<img class="plaza-emot-item" data-code="${it.id}" data-pkg="${utils.escapeHtml(p.name)}" src="${it.url.replace(/"/g, '%22')}" alt="">`).join('')}
-                    </div>
-                </div>
-            `).join('');
-        }
-        panel.dataset.loaded = '1';
+        panel.classList.add('open');
+        await emotpanel.ensure(panel);
+        emotpanel.refreshRecent();
+    },
+
+    closeEmotPanels() {
+        document.querySelectorAll('.plaza-emot-panel').forEach((p) => p.classList.remove('open'));
+        emotpanel.hidePreview();
     },
 
     // 在 textarea 光标处插入文本
@@ -46,7 +37,7 @@ export const events = {
         document.addEventListener('click', async (e) => {
             // 点击面板/表情按钮以外区域时收起表情面板
             if (!e.target.closest('.plaza-emot-panel') && !e.target.closest('.plaza-editor-emot')) {
-                document.querySelectorAll('.plaza-emot-panel').forEach(p => { p.style.display = 'none'; });
+                this.closeEmotPanels();
             }
 
             if (!e.target.closest('.moment-plaza-container, .plaza-promotion')) return;
@@ -59,11 +50,28 @@ export const events = {
                 return;
             }
 
-            // 面板里的表情 → 光标处插入 [emot=acfun,ID/]
+            // 底部条包缩略图 → 切换表情包
+            const packThumb = e.target.closest('.plaza-emot-pack-thumb');
+            if (packThumb) {
+                const panel = packThumb.closest('.plaza-emot-panel');
+                if (panel) emotpanel.selectPack(panel, packThumb.dataset.name);
+                return;
+            }
+
+            // 底部条 ‹/› → 按方向翻动包切换条
+            const footPage = e.target.closest('.plaza-emot-foot-page');
+            if (footPage) {
+                const panel = footPage.closest('.plaza-emot-panel');
+                if (panel) emotpanel.scrollStrip(panel, parseInt(footPage.dataset.dir, 10));
+                return;
+            }
+
+            // 面板里的表情 → 光标处插入 [emot=acfun,ID/]，并记入最近使用
             const emotItem = e.target.closest('.plaza-emot-item');
             if (emotItem) {
                 const input = emotItem.closest('.plaza-comment-editor')?.querySelector('.plaza-editor-input');
                 if (input) this._insertAtCursor(input, `[emot=acfun,${emotItem.dataset.code}/]`);
+                emotpanel.pick(emotItem.dataset.code);
                 return;
             }
 
@@ -327,6 +335,18 @@ export const events = {
             pendingImg.src = url;
             pending.style.display = 'flex';
         });
+
+        // 表情悬停大图预览：mouseover 冒泡委托，item 内部移动不重复触发
+        document.addEventListener('mouseover', (e) => {
+            const item = e.target.closest?.('.plaza-emot-item');
+            if (item && item.closest('.plaza-emot-panel.open')) emotpanel.showPreview(item);
+        });
+        document.addEventListener('mouseout', (e) => {
+            const item = e.target.closest?.('.plaza-emot-item');
+            if (item && !(e.relatedTarget && item.contains(e.relatedTarget))) emotpanel.hidePreview();
+        });
+        // 预览浮层 fixed 定位，面板/页面滚动时立即隐藏，避免错位
+        document.addEventListener('scroll', () => emotpanel.hidePreview(), true);
 
         document.addEventListener('keydown', async (e) => {
             if (e.key !== 'Enter') return;

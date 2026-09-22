@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AcFun 动态广场
 // @namespace    https://www.acfun.cn/
-// @version      3.2.9
+// @version      3.4.0
 // @description  按am号查找动态，按时间排序显示，IndexedDB 预加载缓存
 // @author       name_xxl
 // @match        https://www.acfun.cn/member*
@@ -12,6 +12,7 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @connect      www.acfun.cn
+// @connect      api-new.app.acfun.cn
 // @connect      id.app.acfun.cn
 // @connect      kuaishouzt.com
 // @run-at       document-idle

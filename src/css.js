@@ -265,6 +265,7 @@ const commentStyles = `
         width: 58px;
     }
     .moment-comments .area-comment-left .thumb {
+        position: relative;
         display: block;
         width: 50px;
         height: 50px;
@@ -274,6 +275,16 @@ const commentStyles = `
         height: 50px;
         border-radius: 50%;
         object-fit: cover;
+    }
+    /* 头像框覆盖层：同原生机制（框图为独立 PNG/GIF，约 80x70，中心对齐头像略上移，可带头像外装饰）；楼中楼不展示 */
+    .plaza-avatar-frame {
+        position: absolute;
+        left: -15px;
+        top: -15px;
+        width: 80px;
+        height: 70px;
+        max-width: none;
+        pointer-events: none;
     }
     .moment-comments .area-comment-right {
         flex: 1;
@@ -289,12 +300,12 @@ const commentStyles = `
     }
     .moment-comments .area-comment-title .name {
         text-decoration: none;
-        margin-right: 6px;
+        margin-right: 2px;
     }
     .moment-comments .area-comment-title .time_day {
         color: #999;
         font-size: 12px;
-        margin-right: 4px;
+        margin-right: 0;
     }
     .moment-comments .area-comment-title .time_times {
         color: #999;
@@ -315,31 +326,22 @@ const commentStyles = `
         font-size: 12px;
         color: #999;
     }
+    /* 赞按钮图标：原版 13px SVG（base64 抄自原生评论区） */
     .moment-comments .area-comment-like {
         color: #999;
         cursor: pointer;
         margin-right: 13px;
-    }
-    .moment-comments .area-comment-like::before {
-        content: '';
-        display: inline-block;
-        width: 13px;
-        height: 13px;
-        margin-right: 4px;
-        vertical-align: -2px;
-        background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23999'%3E%3Cpath d='M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z'/%3E%3C/svg%3E") no-repeat center;
+        padding-left: 20px;
+        background: url("data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iMTNweCIgaGVpZ2h0PSIxM3B4IiB2aWV3Qm94PSIwIDAgMTMgMTMiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8IS0tIEdlbmVyYXRvcjogU2tldGNoIDUyLjUgKDY3NDY5KSAtIGh0dHA6Ly93d3cuYm9oZW1pYW5jb2RpbmcuY29tL3NrZXRjaCAtLT4KICAgIDx0aXRsZT5pY29uX2NvbW1lbnRfejwvdGl0bGU+CiAgICA8ZGVzYz5DcmVhdGVkIHdpdGggU2tldGNoLjwvZGVzYz4KICAgIDxnIGlkPSJpY29uX2NvbW1lbnRfeiIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjEiIGZpbGw9Im5vbmUiIGZpbGwtcnVsZT0iZXZlbm9kZCI+CiAgICAgICAgPGcgaWQ9InphbjEiIGZpbGw9IiM5OTk5OTkiIGZpbGwtcnVsZT0ibm9uemVybyI+CiAgICAgICAgICAgIDxwYXRoIGQ9Ik0xLjUsMyBDMi4zMjg0MjcxMiwzIDMsMy42NzE1NzI4OCAzLDQuNSBMMywxMC41IEMzLDExLjMyODQyNzEgMi4zMjg0MjcxMiwxMiAxLjUsMTIgQzAuNjcxNTcyODc1LDEyIDEuNTU0MzEyMjNlLTE1LDExLjMyODQyNzEgLTEuMTEwMjIzMDJlLTE2LDEwLjUgTC0xLjExMDIyMzAyZS0xNiw0LjUgQy0xLjExMDIyMzAyZS0xNiwzLjY3MTU3Mjg4IDAuNjcxNTcyODc1LDMgMS41LDMgWiIgaWQ9IlJlY3RhbmdsZS0xNSI+PC9wYXRoPgogICAgICAgICAgICA8cGF0aCBkPSJNMTAuNzI0Njg3NSwzLjg5NjQzNDI0IEMxMi4xNzUyNzM5LDMuODk2NDM0MjQgMTMuMjkwNjc2Nyw1LjI4MTY0OTIgMTIuOTM3NTY1Miw2LjQ3MTUxNTkgTDExLjg1NDEwMjcsMTAuMTIyNDE4MyBDMTEuNDE0OTkyNSwxMS42MDIwNzEzIDEwLjkxODg0OTgsMTIgOS40MjQ1MzI1OCwxMiBMNC41LDEyIEM0LjIyMzg1NzYzLDEyIDQsMTEuNzc2MTQyNCA0LDExLjUgTDQsNC4zNSBDNCw0LjE4MDExMDQzIDQuMDg2MjY1NDEsNC4wMjE4NDQzMSA0LjIyOTA0NzMzLDMuOTI5NzgwMjQgTDUuMjM4MDAzODIsMy4yODA5MTY0NSBDNS41NjY5MDY4NiwzLjAzMTc2Mjg3IDUuNzkzNTMxMDIsMi43NDE0OTM3MyA1Ljk1MzY0MjQ5LDIuMzk1MDE4OTggQzYuMDkyOTI0MTksMi4wOTM2MTkwMiA2LjEyMjA3MDY5LDEuOTgxNjQyMjYgNi4yNzc0ODI4OCwxLjI1OTk1OTU2IEM2LjQ4OTkzNzgsMC4yNzMzODkzNDcgNi44NjM3MzY2OSwtMC4xNjExNDk5NjggNy43OTc0MTA0NiwwLjA0MjIyODg2MTYgQzkuMjg0MjE3OTgsMC4zNjYwOTQ4NDUgOS41NzE5NDQ1MSwxLjczNDE4MTczIDguODQzMDE1OTksMy44OTY0MzQyNCBMMTAuNzI0Njg3NSwzLjg5NjQzNDI0IFoiIGlkPSJQYXRoLTQiPjwvcGF0aD4KICAgICAgICA8L2c+CiAgICA8L2c+Cjwvc3ZnPg==") no-repeat 1px 1px / 13px 13px;
     }
     .moment-comments .area-comment-like:hover {
         color: #fd4c5c;
+        background-image: url("data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iMTNweCIgaGVpZ2h0PSIxM3B4IiB2aWV3Qm94PSIwIDAgMTMgMTMiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8IS0tIEdlbmVyYXRvcjogU2tldGNoIDUyLjUgKDY3NDY5KSAtIGh0dHA6Ly93d3cuYm9oZW1pYW5jb2RpbmcuY29tL3NrZXRjaCAtLT4KICAgIDx0aXRsZT5pY29uX2NvbW1lbnRfejwvdGl0bGU+CiAgICA8ZGVzYz5DcmVhdGVkIHdpdGggU2tldGNoLjwvZGVzYz4KICAgIDxnIGlkPSJpY29uX2NvbW1lbnRfeiIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjEiIGZpbGw9Im5vbmUiIGZpbGwtcnVsZT0iZXZlbm9kZCI+CiAgICAgICAgPGcgaWQ9InphbjEiIGZpbGw9IiNmZDRjNWMiIGZpbGwtcnVsZT0ibm9uemVybyI+CiAgICAgICAgICAgIDxwYXRoIGQ9Ik0xLjUsMyBDMi4zMjg0MjcxMiwzIDMsMy42NzE1NzI4OCAzLDQuNSBMMywxMC41IEMzLDExLjMyODQyNzEgMi4zMjg0MjcxMiwxMiAxLjUsMTIgQzAuNjcxNTcyODc1LDEyIDEuNTU0MzEyMjNlLTE1LDExLjMyODQyNzEgLTEuMTEwMjIzMDJlLTE2LDEwLjUgTC0xLjExMDIyMzAyZS0xNiw0LjUgQy0xLjExMDIyMzAyZS0xNiwzLjY3MTU3Mjg4IDAuNjcxNTcyODc1LDMgMS41LDMgWiIgaWQ9IlJlY3RhbmdsZS0xNSI+PC9wYXRoPgogICAgICAgICAgICA8cGF0aCBkPSJNMTAuNzI0Njg3NSwzLjg5NjQzNDI0IEMxMi4xNzUyNzM5LDMuODk2NDM0MjQgMTMuMjkwNjc2Nyw1LjI4MTY0OTIgMTIuOTM3NTY1Miw2LjQ3MTUxNTkgTDExLjg1NDEwMjcsMTAuMTIyNDE4MyBDMTEuNDE0OTkyNSwxMS42MDIwNzEzIDEwLjkxODg0OTgsMTIgOS40MjQ1MzI1OCwxMiBMNC41LDEyIEM0LjIyMzg1NzYzLDEyIDQsMTEuNzc2MTQyNCA0LDExLjUgTDQsNC4zNSBDNCw0LjE4MDExMDQzIDQuMDg2MjY1NDEsNC4wMjE4NDQzMSA0LjIyOTA0NzMzLDMuOTI5NzgwMjQgTDUuMjM4MDAzODIsMy4yODA5MTY0NSBDNS41NjY5MDY4NiwzLjAzMTc2Mjg3IDUuNzkzNTMxMDIsMi43NDE0OTM3MyA1Ljk1MzY0MjQ5LDIuMzk1MDE4OTggQzYuMDkyOTI0MTksMi4wOTM2MTkwMiA2LjEyMjA3MDY5LDEuOTgxNjQyMjYgNi4yNzc0ODI4OCwxLjI1OTk1OTU2IEM2LjQ4OTkzNzgsMC4yNzMzODkzNDcgNi44NjM3MzY2OSwtMC4xNjExNDk5NjggNy43OTc0MTA0NiwwLjA0MjIyODg2MTYgQzkuMjg0MjE3OTgsMC4zNjYwOTQ4NDUgOS41NzE5NDQ1MSwxLjczNDE4MTczIDguODQzMDE1OTksMy44OTY0MzQyNCBMMTAuNzI0Njg3NSwzLjg5NjQzNDI0IFoiIGlkPSJQYXRoLTQiPjwvcGF0aD4KICAgICAgICA8L2c+CiAgICA8L2c+Cjwvc3ZnPg==");
     }
-    .moment-comments .area-comment-like:hover::before {
-        background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23fd4c5c'%3E%3Cpath d='M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z'/%3E%3C/svg%3E") no-repeat center;
-    }
-    .moment-comments .area-comment-like.area-comment-up {
+    .moment-comments .area-comment-like.area-comment-up,
+    .moment-comments .area-comment-like[active] {
         color: #fd4c5c !important;
-    }
-    .moment-comments .area-comment-like.area-comment-up::before {
-        background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23fd4c5c'%3E%3Cpath d='M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z'/%3E%3C/svg%3E") no-repeat center;
+        background-image: url("data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iMTNweCIgaGVpZ2h0PSIxM3B4IiB2aWV3Qm94PSIwIDAgMTMgMTMiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8IS0tIEdlbmVyYXRvcjogU2tldGNoIDUyLjUgKDY3NDY5KSAtIGh0dHA6Ly93d3cuYm9oZW1pYW5jb2RpbmcuY29tL3NrZXRjaCAtLT4KICAgIDx0aXRsZT5pY29uX2NvbW1lbnRfejwvdGl0bGU+CiAgICA8ZGVzYz5DcmVhdGVkIHdpdGggU2tldGNoLjwvZGVzYz4KICAgIDxnIGlkPSJpY29uX2NvbW1lbnRfeiIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjEiIGZpbGw9Im5vbmUiIGZpbGwtcnVsZT0iZXZlbm9kZCI+CiAgICAgICAgPGcgaWQ9InphbjEiIGZpbGw9IiNmZDRjNWMiIGZpbGwtcnVsZT0ibm9uemVybyI+CiAgICAgICAgICAgIDxwYXRoIGQ9Ik0xLjUsMyBDMi4zMjg0MjcxMiwzIDMsMy42NzE1NzI4OCAzLDQuNSBMMywxMC41IEMzLDExLjMyODQyNzEgMi4zMjg0MjcxMiwxMiAxLjUsMTIgQzAuNjcxNTcyODc1LDEyIDEuNTU0MzEyMjNlLTE1LDExLjMyODQyNzEgLTEuMTEwMjIzMDJlLTE2LDEwLjUgTC0xLjExMDIyMzAyZS0xNiw0LjUgQy0xLjExMDIyMzAyZS0xNiwzLjY3MTU3Mjg4IDAuNjcxNTcyODc1LDMgMS41LDMgWiIgaWQ9IlJlY3RhbmdsZS0xNSI+PC9wYXRoPgogICAgICAgICAgICA8cGF0aCBkPSJNMTAuNzI0Njg3NSwzLjg5NjQzNDI0IEMxMi4xNzUyNzM5LDMuODk2NDM0MjQgMTMuMjkwNjc2Nyw1LjI4MTY0OTIgMTIuOTM3NTY1Miw2LjQ3MTUxNTkgTDExLjg1NDEwMjcsMTAuMTIyNDE4MyBDMTEuNDE0OTkyNSwxMS42MDIwNzEzIDEwLjkxODg0OTgsMTIgOS40MjQ1MzI1OCwxMiBMNC41LDEyIEM0LjIyMzg1NzYzLDEyIDQsMTEuNzc2MTQyNCA0LDExLjUgTDQsNC4zNSBDNCw0LjE4MDExMDQzIDQuMDg2MjY1NDEsNC4wMjE4NDQzMSA0LjIyOTA0NzMzLDMuOTI5NzgwMjQgTDUuMjM4MDAzODIsMy4yODA5MTY0NSBDNS41NjY5MDY4NiwzLjAzMTc2Mjg3IDUuNzkzNTMxMDIsMi43NDE0OTM3MyA1Ljk1MzY0MjQ5LDIuMzk1MDE4OTggQzYuMDkyOTI0MTksMi4wOTM2MTkwMiA2LjEyMjA3MDY5LDEuOTgxNjQyMjYgNi4yNzc0ODI4OCwxLjI1OTk1OTU2IEM2LjQ4OTkzNzgsMC4yNzMzODkzNDcgNi44NjM3MzY2OSwtMC4xNjExNDk5NjggNy43OTc0MTA0NiwwLjA0MjIyODg2MTYgQzkuMjg0MjE3OTgsMC4zNjYwOTQ4NDUgOS41NzE5NDQ1MSwxLjczNDE4MTczIDguODQzMDE1OTksMy44OTY0MzQyNCBMMTAuNzI0Njg3NSwzLjg5NjQzNDI0IFoiIGlkPSJQYXRoLTQiPjwvcGF0aD4KICAgICAgICA8L2c+CiAgICA8L2c+Cjwvc3ZnPg==");
     }
     .moment-comments .area-comment-from {
         color: #999;
@@ -379,17 +381,16 @@ const commentStyles = `
     }
     .moment-comments .area-comment-sec .area-comment-right {
         margin-left: 0;
-        padding-right: 10px;
+        padding-right: 0;
     }
     .moment-comments .area-comment-sec .area-comment-first {
-        padding: 0 10px 0;
+        padding: 0;
         margin: 15px 0 0;
     }
     .moment-comments .area-comment-sec .sec:first-child .area-comment-first {
         margin-top: 0;
     }
     .moment-comments .area-comment-sec .name {
-        color: #333;
         font-weight: 700;
     }
     .moment-comments .area-comment-sec hr {
@@ -398,15 +399,6 @@ const commentStyles = `
     .plaza-reply-prefix {
         color: #999;
         font-size: 14px;
-    }
-    .moment-comments .plaza-up-tag {
-        background: #fd4c5c;
-        color: #fff;
-        font-size: 10px;
-        padding: 0 4px;
-        border-radius: 2px;
-        margin-right: 6px;
-        vertical-align: middle;
     }
     .plaza-comment-empty, .plaza-comment-load-failed {
         padding: 20px 0;
@@ -520,70 +512,185 @@ const editorStyles = `
     .plaza-editor-pending-del:hover {
         color: #fd4c5c;
     }
-    /* 表情面板 */
+    /* 表情面板：对齐原生三段式——头部包名 / 6 列大格子网格 / 底部灰底包切换条 */
     .plaza-emot-panel {
         position: absolute;
-        bottom: calc(100% + 6px);
+        bottom: calc(100% + 10px);
         left: 0;
-        width: 360px;
-        max-height: 300px;
-        overflow-y: auto;
+        width: 560px;
+        max-width: calc(100vw - 48px);
+        display: none;
+        flex-direction: column;
         background: #fff;
-        border: 1px solid #e6e6e6;
-        border-radius: 6px;
-        box-shadow: 0 4px 16px rgba(0,0,0,.12);
-        padding: 10px 12px;
+        border: 1px solid #e8e8e8;
+        border-radius: 8px;
+        box-shadow: 0 6px 24px rgba(0,0,0,.14);
+        box-sizing: border-box;
         z-index: 100;
     }
-    .plaza-emot-pack-name {
-        font-size: 12px;
-        color: #999;
-        margin: 8px 0 6px;
+    .plaza-emot-panel.open {
+        display: flex;
     }
-    .plaza-emot-pack:first-child .plaza-emot-pack-name {
-        margin-top: 0;
+    /* 指向表情按钮的小三角 */
+    .plaza-emot-panel::before {
+        content: '';
+        position: absolute;
+        top: -6px;
+        left: 22px;
+        width: 10px;
+        height: 10px;
+        background: #fff;
+        border-left: 1px solid #e8e8e8;
+        border-top: 1px solid #e8e8e8;
+        transform: rotate(45deg);
+    }
+    .plaza-emot-head {
+        flex: 0 0 auto;
+        padding: 14px 20px 8px;
+    }
+    .plaza-emot-pack-name {
+        font-size: 14px;
+        color: #333;
     }
     .plaza-emot-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, 34px);
-        gap: 4px;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 2px 6px;
+        padding: 0 14px;
+        max-height: 316px;
+        overflow-y: auto;
+        min-height: 0;
+        flex: 1 1 auto;
+        overscroll-behavior: contain;
     }
     .plaza-emot-item {
-        width: 30px;
-        height: 30px;
+        width: 100%;
+        height: 56px;
+        padding: 6px;
+        box-sizing: border-box;
         object-fit: contain;
         cursor: pointer;
+        border-radius: 6px;
     }
-    .plaza-emot-item[data-pkg="AC娘迷你版"] {
+    .plaza-emot-item:hover {
+        background: #f2f2f2;
+    }
+    .plaza-emot-foot {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        margin-top: 8px;
+        padding: 6px 10px;
+        background: #f8f8f8;
+        border-top: 1px solid #f0f0f0;
+        border-radius: 0 0 7px 7px;
+    }
+    .plaza-emot-strip {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        overflow-x: auto;
+        scrollbar-width: none;
+        min-width: 0;
+        flex: 1 1 auto;
+        padding: 3px;
+    }
+    .plaza-emot-strip::-webkit-scrollbar {
+        display: none;
+    }
+    /* 加 .plaza-emot-panel 前缀压过 .plaza-comment-editor button 的红色按钮全局样式 */
+    .plaza-emot-panel .plaza-emot-pack-thumb {
+        flex: 0 0 auto;
+        width: 36px;
+        height: 36px;
+        padding: 0;
+        border: none;
+        border-radius: 4px;
+        background: none;
+        cursor: pointer;
+        opacity: .75;
+        transition: width .12s ease, height .12s ease, opacity .12s ease;
+    }
+    .plaza-emot-panel .plaza-emot-pack-thumb img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
+    }
+    .plaza-emot-panel .plaza-emot-pack-thumb:hover {
+        opacity: 1;
+    }
+    .plaza-emot-panel .plaza-emot-pack-thumb.active {
+        width: 46px;
+        height: 46px;
+        opacity: 1;
+    }
+    .plaza-emot-panel .plaza-emot-foot-page {
+        flex: 0 0 auto;
         width: 26px;
         height: 26px;
+        padding: 0;
+        border: none;
+        border-radius: 50%;
+        background: none;
+        color: #666;
+        font-size: 20px;
+        line-height: 24px;
+        text-align: center;
+        cursor: pointer;
+    }
+    .plaza-emot-panel .plaza-emot-foot-page:hover {
+        background: #e9e9e9;
     }
     .plaza-emot-empty {
         color: #999;
         font-size: 12px;
         padding: 8px 0;
     }
+    /* 悬停大图预览浮层（fixed，尺寸与 emotpanel.js 中常量一致） */
+    .plaza-emot-preview {
+        display: none;
+        position: fixed;
+        z-index: 1000;
+        width: 140px;
+        padding: 8px;
+        background: #fff;
+        border: 1px solid #e6e6e6;
+        border-radius: 8px;
+        box-shadow: 0 6px 20px rgba(0,0,0,.15);
+        text-align: center;
+        pointer-events: none;
+    }
+    .plaza-emot-preview.show {
+        display: block;
+    }
+    .plaza-emot-preview img {
+        width: 120px;
+        height: 120px;
+        object-fit: contain;
+    }
+    .plaza-emot-preview span {
+        display: block;
+        margin-top: 4px;
+        font-size: 12px;
+        color: #666;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
     /* 回复按钮与回复框 */
     .plaza-reply-btn {
         color: #999;
         cursor: pointer;
-        margin-right: 16px;
+        margin-right: 13px;
         font-size: 12px;
-    }
-    .plaza-reply-btn::before {
-        content: '';
-        display: inline-block;
-        width: 14px;
-        height: 14px;
-        margin-right: 4px;
-        vertical-align: -2px;
-        background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23999'%3E%3Cpath d='M21.99 4c0-1.1-.89-2-1.99-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14l4 4-.01-18z'/%3E%3C/svg%3E") no-repeat center;
+        padding-left: 17px;
+        background: url("data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iMTNweCIgaGVpZ2h0PSIxM3B4IiB2aWV3Qm94PSIwIDAgMTMgMTMiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8IS0tIEdlbmVyYXRvcjogU2tldGNoIDUyLjUgKDY3NDY5KSAtIGh0dHA6Ly93d3cuYm9oZW1pYW5jb2RpbmcuY29tL3NrZXRjaCAtLT4KICAgIDx0aXRsZT5pY29uX2NvbW1lbnRfcGw8L3RpdGxlPgogICAgPGRlc2M+Q3JlYXRlZCB3aXRoIFNrZXRjaC48L2Rlc2M+CiAgICA8ZyBpZD0iaWNvbl9jb21tZW50X3BsIiBzdHJva2U9Im5vbmUiIHN0cm9rZS13aWR0aD0iMSIgZmlsbD0ibm9uZSIgZmlsbC1ydWxlPSJldmVub2RkIj4KICAgICAgICA8ZyBpZD0iaWNvbl/mlofnq6Dor4TorrotY29weS0yIiBmaWxsPSIjOTk5OTk5IiBmaWxsLXJ1bGU9Im5vbnplcm8iPgogICAgICAgICAgICA8cGF0aCBkPSJNNC4wNzAwMjc0NywxMiBMMC42MzczNjA1NjQsMTIuOTgwNzYyIEMwLjMxNzk1MjQ2MSwxMy4wNzIwMjE0IDAsMTIuODMyMTg5NCAwLDEyLjUgTDAsNCBDMCwyLjcyMzg1NzYzIDAuNzIzODU3NjI1LDIgMiwyIEwxMSwyIEMxMi4yNzYxNDI0LDIgMTMsMi43MjM4NTc2MyAxMyw0IEwxMywxMCBDMTMsMTEuMjc2MTQyNCAxMi4yNzYxNDI0LDEyIDExLDEyIEw0LjA3MDAyNzQ3LDEyIFogTTksNSBDOC40NDc3MTUyNSw1IDgsNS40NDc3MTUyNSA4LDYgTDgsNyBDOCw3LjU1MjI4NDc1IDguNDQ3NzE1MjUsOCA5LDggQzkuNTUyMjg0NzUsOCAxMCw3LjU1MjI4NDc1IDEwLDcgTDEwLDYgQzEwLDUuNDQ3NzE1MjUgOS41NTIyODQ3NSw1IDksNSBaIE00LDUgQzMuNDQ3NzE1MjUsNSAzLDUuNDQ3NzE1MjUgMyw2IEwzLDcgQzMsNy41NTIyODQ3NSAzLjQ0NzcxNTI1LDggNCw4IEM0LjU1MjI4NDc1LDggNSw3LjU1MjI4NDc1IDUsNyBMNSw2IEM1LDUuNDQ3NzE1MjUgNC41NTIyODQ3NSw1IDQsNSBaIiBpZD0iQ29tYmluZWQtU2hhcGUiPjwvcGF0aD4KICAgICAgICA8L2c+CiAgICA8L2c+Cjwvc3ZnPg==") no-repeat 0 1px / 13px 13px;
     }
     .plaza-reply-btn:hover {
         color: #fd4c5c;
-    }
-    .plaza-reply-btn:hover::before {
-        background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23fd4c5c'%3E%3Cpath d='M21.99 4c0-1.1-.89-2-1.99-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14l4 4-.01-18z'/%3E%3C/svg%3E") no-repeat center;
+        background-image: url("data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB3aWR0aD0iMTNweCIgaGVpZ2h0PSIxM3B4IiB2aWV3Qm94PSIwIDAgMTMgMTMiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayI+CiAgICA8IS0tIEdlbmVyYXRvcjogU2tldGNoIDUyLjUgKDY3NDY5KSAtIGh0dHA6Ly93d3cuYm9oZW1pYW5jb2RpbmcuY29tL3NrZXRjaCAtLT4KICAgIDx0aXRsZT5pY29uX2NvbW1lbnRfcGw8L3RpdGxlPgogICAgPGRlc2M+Q3JlYXRlZCB3aXRoIFNrZXRjaC48L2Rlc2M+CiAgICA8ZyBpZD0iaWNvbl9jb21tZW50X3BsIiBzdHJva2U9Im5vbmUiIHN0cm9rZS13aWR0aD0iMSIgZmlsbD0ibm9uZSIgZmlsbC1ydWxlPSJldmVub2RkIj4KICAgICAgICA8ZyBpZD0iaWNvbl/mlofnq6Dor4TorrotY29weS0yIiBmaWxsPSIjZmQ0YzVjIiBmaWxsLXJ1bGU9Im5vbnplcm8iPgogICAgICAgICAgICA8cGF0aCBkPSJNNC4wNzAwMjc0NywxMiBMMC42MzczNjA1NjQsMTIuOTgwNzYyIEMwLjMxNzk1MjQ2MSwxMy4wNzIwMjE0IDAsMTIuODMyMTg5NCAwLDEyLjUgTDAsNCBDMCwyLjcyMzg1NzYzIDAuNzIzODU3NjI1LDIgMiwyIEwxMSwyIEMxMi4yNzYxNDI0LDIgMTMsMi43MjM4NTc2MyAxMyw0IEwxMywxMCBDMTMsMTEuMjc2MTQyNCAxMi4yNzYxNDI0LDEyIDExLDEyIEw0LjA3MDAyNzQ3LDEyIFogTTksNSBDOC40NDc3MTUyNSw1IDgsNS40NDc3MTUyNSA4LDYgTDgsNyBDOCw3LjU1MjI4NDc1IDguNDQ3NzE1MjUsOCA5LDggQzkuNTUyMjg0NzUsOCAxMCw3LjU1MjI4NDc1IDEwLDcgTDEwLDYgQzEwLDUuNDQ3NzE1MjUgOS41NTIyODQ3NSw1IDksNSBaIE00LDUgQzMuNDQ3NzE1MjUsNSAzLDUuNDQ3NzE1MjUgMyw2IEwzLDcgQzMsNy41NTIyODQ3NSAzLjQ0NzcxNTI1LDggNCw4IEM0LjU1MjI4NDc1LDggNSw3LjU1MjI4NDc1IDUsNyBMNSw2IEM1LDUuNDQ3NzE1MjUgNC41NTIyODQ3NSw1IDQsNSBaIiBpZD0iQ29tYmluZWQtU2hhcGUiPjwvcGF0aD4KICAgICAgICA8L2c+CiAgICA8L2c+Cjwvc3ZnPg==");
     }
     .plaza-reply-box {
         display: flex;
@@ -682,22 +789,6 @@ const contentStyles = `
 `;
 
 const uiStyles = `
-    /* 首次设置框 */
-    .plaza-setup-box {
-        max-width: 500px;
-        margin: 80px auto;
-        padding: 30px;
-        background: #fff;
-        border-radius: 8px;
-        box-shadow: 0 2px 12px rgba(0,0,0,.08);
-        text-align: left;
-    }
-    #plaza-link-input:focus {
-        border-color: #fd4c5c;
-    }
-    #plaza-link-btn:hover {
-        background: #e8434f;
-    }
     /* 侧边栏动态广场选中样式（仿原生） */
     .plaza-nav-item.ac-member-navigation-item-active {
         color: #fd4c5c !important;

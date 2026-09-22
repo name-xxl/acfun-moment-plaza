@@ -44,34 +44,6 @@ export const db = {
         });
     },
 
-    // 取 amId < fromId 的 count 条（按 amId 降序，即较新的在前）
-    // 旧版本存下的「粉丝可见」遗留记录不进入展示流（会随保留天数自动清除）
-    async getOlderThan(fromId, count) {
-        const d = await this.open();
-        return new Promise((resolve, reject) => {
-            const store = d.transaction(STORE_MOMENTS, 'readonly').objectStore(STORE_MOMENTS);
-            const range = IDBKeyRange.upperBound(fromId, true);
-            const result = [];
-            const req = store.openCursor(range, 'prev');
-            req.onsuccess = (e) => {
-                const cursor = e.target.result;
-                if (!cursor) {
-                    resolve(result);
-                    return;
-                }
-                if (!(cursor.value.data && cursor.value.data.visibleForFans)) {
-                    result.push(cursor.value);
-                }
-                if (result.length < count) {
-                    cursor.continue();
-                } else {
-                    resolve(result);
-                }
-            };
-            req.onerror = () => reject(req.error);
-        });
-    },
-
     // 删除 absTs < cutoffTs 的过期记录
     async deleteOlderThan(cutoffTs) {
         const d = await this.open();

@@ -1,20 +1,15 @@
 export const CONFIG = {
-    MOMENT_API: 'https://www.acfun.cn/rest/pc-direct/moment/detail',
-    CONCURRENT: 10,        // 并发请求数
-    MAX_EMPTY: 30,         // 连续空号上限
-    BATCH_SIZE: 20,        // 向上/向下每次加载的固定条数
+    FEED_SQUARE_API: 'https://api-new.app.acfun.cn/rest/app/feed/feedSquare', // 动态广场列表（免登录，每页固定 20 条，pcursor 翻页）
+    MOMENT_API: 'https://www.acfun.cn/rest/pc-direct/moment/detail',           // 单条动态详情（互动数字刷新用）
 
     FRESH_WINDOW_MS: 3 * 3600 * 1000,   // 发布 ≤3 小时 → 互动数字用加载动画 + 后台注入
-    UP_STOP_AT_MS: 1 * 3600 * 1000,     // 向上爬到「发布 ≤1 小时」的动态即停
-    DOWN_STOP_AFTER_MS: 24 * 3600 * 1000, // 向下爬到「发布 >24 小时」的动态即停
+    DOWN_STOP_AFTER_MS: 24 * 3600 * 1000, // 向下翻到「发布 >24 小时」的动态即停
 
     UP_POLL_INTERVAL: 60 * 1000,            // 向上后台轮询的基准间隔
     UP_POLL_BACKOFF_MAX_MS: 10 * 60 * 1000, // 向上轮询空手而归后的退避上限
 
     KEEP_DAYS_DEFAULT: 3,               // 数据库默认保留天数（1-7 可调）
 
-    CRAWL_BATCH_DELAY_MS: 60,           // 爬取批次之间的停顿
-    SCAN_LIMIT_MULTIPLIER: 50,          // 单次爬取的扫描上限 = 目标条数 × 此倍数
     TOKEN_TTL_MS: 30 * 60 * 1000,       // 互动 API token 有效期
     MAX_IMAGES: 9,                      // 单条动态最多展示的图片数
     BACK_TOP_THRESHOLD: 300,            // 距顶部多少像素显示回顶按钮
@@ -25,22 +20,11 @@ export const CONFIG = {
     PROMOTION_DELAY_MS: 1000,           // feeds 页推广条延迟出现
     TOAST_DURATION_MS: 1500,            // 分享复制成功提示时长
     COMMENT_PAGE_SIZE: 10,              // 评论列表每页条数
-    UP_CRAWL_TARGET: 50,                // 向上后台爬取的目标条数
-    FF_STALE_THRESHOLD_MS: 2 * 3600 * 1000, // 数据超过此时间视为旧，触发快速定位
-    FF_PROBE_SPAN_MS: 10 * 60 * 1000,   // 探针采样宽度覆盖的时间跨度（按速率换算成 ID 数）
-    FF_PROBE_SIZE: 5,                   // 探针最少采样的连续 am 号数（速率未知时）
-    FF_PROBE_MAX: 30,                   // 探针最多采样的连续 am 号数
-    FF_CONVERGE_GAP: 20,                // 上下界收敛到此间隔即停止，交给逐号补抓
-    FF_MAX_PROBES: 24,                  // 最大探针轮数
-    FF_INITIAL_STEP: 2000,              // 速率未知时的盲跳初始步长
-    FF_STEP_MULTIPLIER: 4,              // 盲跳命中后的步长倍率
-    FF_MIN_STEP: 50,                    // 盲跳落空则减半，低于此值即认定越过边界
     KEEP_DAYS_OPTIONS: [1, 2, 3, 4, 5, 6, 7], // 保留天数可选项
     UPLOAD_CHUNK_SIZE: 1 * 1024 * 1024, // 评论图片上传分片大小（与原生一致 1M）
     MAX_IMAGE_SIZE: 5 * 1024 * 1024,    // 评论图片大小上限（原生提示 5M）
 };
 
-export const LAST_AM_KEY = 'moment_plaza_last_am';
 export const KEEP_DAYS_KEY = 'moment_plaza_keep_days';
 export const AUTO_ENTER_KEY = 'moment_plaza_auto_enter';
 export const LAST_DISCOVERY_KEY = 'moment_plaza_last_discovery';

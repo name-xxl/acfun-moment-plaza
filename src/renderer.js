@@ -285,7 +285,6 @@ export const renderer = {
         const floor = comment.floor || '';
         const nameColor = comment.nameColor === 2 ? NAME_COLOR_PURPLE : NAME_COLOR_RED;
         const device = comment.deviceModel || '';
-        const isUp = comment.isUp;
         const isCommentLiked = comment.isLiked || false;
 
         // 楼中楼回复前缀：回复 @被回复用户名 :
@@ -302,20 +301,23 @@ export const renderer = {
             : '';
 
         const secClass = isSec ? ' sec' : '';
-        const nameStyle = isSec ? '' : ` style="color:${nameColor}"`;
+        // 根评论与楼中楼的名字都用内联彩色（红/紫），与原生一致
+        const nameStyle = ` style="color:${nameColor}"`;
+        // 头像框：独立图覆盖在头像上（同原生 avatar-bg 机制）；原生楼中楼不展示头像框
+        const avatarFrame = isSec ? '' : utils.attrEscape(comment.avatarFrameImgInfo?.thumbnailImage?.cdnUrls?.[0]?.url || '');
 
         return `
-            <div class="area-comment-top clearfix plaza-comment-item${secClass}">
+            <div class="area-comment-top clearfix plaza-comment-item${secClass}" data-commentid="${comment.commentId}">
                 <div class="area-comment-first clearfix">
                     <div class="area-comment-left">
                         <a class="thumb" target="_blank" href="//www.acfun.cn/u/${userId}">
                             <img class="avatar" src="${avatar}">
+                            ${avatarFrame ? `<img class="plaza-avatar-frame" src="${avatarFrame}" alt="">` : ''}
                         </a>
                     </div>
                     <div class="area-comment-right">
                         <div class="area-comment-title">
-                            <a class="name" target="_blank" href="//www.acfun.cn/u/${userId}"${nameStyle}>${utils.escapeHtml(userName)}</a>
-                            ${isUp ? '<span class="plaza-up-tag">UP主</span>' : ''}
+                            <a class="name" data-userid="${userId}" target="_blank" href="//www.acfun.cn/u/${userId}"${nameStyle}>${utils.escapeHtml(userName)}</a>
                             <span class="time_day">发表于</span>
                             <span class="time_times">${time}</span>
                         </div>

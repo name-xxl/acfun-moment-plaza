@@ -1,4 +1,4 @@
-import { CONFIG, LAST_AM_KEY, KEEP_DAYS_KEY, LAST_DISCOVERY_KEY } from './config.js';
+import { CONFIG, KEEP_DAYS_KEY, LAST_DISCOVERY_KEY } from './config.js';
 import { state } from './state.js';
 
 export const utils = {
@@ -124,14 +124,6 @@ export const utils = {
         });
         html = html.replace(/\r?\n/g, '<br>');
         return html;
-    },
-
-    getLastAmId() {
-        try { return GM_getValue(LAST_AM_KEY, 0); } catch { return 0; }
-    },
-
-    setLastAmId(amId) {
-        try { GM_setValue(LAST_AM_KEY, amId); } catch (e) {}
     },
 
     getKeepDays() {
