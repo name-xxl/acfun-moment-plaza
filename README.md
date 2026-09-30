@@ -376,6 +376,8 @@ body: sourceId={am号}&sourceType=4&commentId={评论ID}
 
 内容解析规则表化：每种 UBB 格式在 `src/parser.js` 的规则表中登记一条（含富文本渲染 `toHtml` 与纯文本剥离 `toText`），`parseContent()`（正文/评论）与 `plainText()`（转发卡片标题）从同一张表派生，新增格式只改一处。脚本内生成 UBB（插表情/带图评论）也走 parser 的词汇表函数（`emotUbb`/`imgUbb`），保证与解析规则同源。
 
+同一种视频/文章链接在两个接口里是两种方言：feedSquare 列表接口给紧凑形式 `[ac=id@video]id[/ac]`（display 只有 id），pc-direct 详情接口给完整形式 `[resource id type icon]标题[/resource]`（带视频标题）。列表渲染后由 `_refreshOneMoment` 拉详情刷新，正文解析结果有变化时同步替换，老动态（>3h 不拉详情）保持紧凑形式。
+
 `parseContent()` 处理动态/评论文本：
 
 | 格式 | 转换结果 |
@@ -384,7 +386,8 @@ body: sourceId={am号}&sourceType=4&commentId={评论ID}
 | `#话题#` | `<a href="/search?keyword=话题">#话题#</a>` |
 | `ac12345` | `<a href="/a/ac12345">ac12345</a>` |
 | `v/ac12345` / `a/ac12345` | 对应链接 |
-| `[ac=48879687@video]文字[/ac]` | `<a href="/v/ac48879687">文字</a>`，前置原生播放图标；`@article`/无后缀走 `/a/` |
+| `[ac=48879687@video]文字[/ac]` | `<a href="/v/ac48879687">文字</a>`，前置原生播放图标；`@article`/无后缀走 `/a/`（feedSquare 紧凑方言） |
+| `[resource id=48879687 type=2 icon=...]标题[/resource]` | 同上渲染，type 2=视频 3=文章（pc-direct 详情方言，带视频标题） |
 | `m.acfun.cn/communityCircle/moment/123` | `www.acfun.cn/moment/am123` |
 | `[emot=acfun,1673/]` | 有表情映射时为 `<img>`，无映射时显示 `[表情]` |
 | `[img=图片]https://...[/img]` | `<img src="https://...">` |

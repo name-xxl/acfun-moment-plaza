@@ -2,6 +2,7 @@ import { CONFIG, SEL_MAIN_FEEDS, AUTO_ENTER_KEY } from './config.js';
 import { state } from './state.js';
 import { format } from './format.js';
 import { storage } from './storage.js';
+import { parser } from './parser.js';
 import { db } from './db.js';
 import { api } from './api.js';
 import { renderer } from './renderer.js';
@@ -171,6 +172,11 @@ export const controller = {
                     if (btn) btn.classList.add('active');
                 }
             }
+            // feedSquare 与详情接口的链接标签是两种方言（[ac=id@video] / [resource]），
+            // 详情富文本带视频标题：正文解析结果有变化时才替换，避免表情图无谓重载
+            const textEl = card.querySelector('.member-feed-text');
+            const text = parser.parseContent(moment.text || moment.replaceUbbText || '');
+            if (textEl && textEl.innerHTML !== text) textEl.innerHTML = text;
         }
     },
 

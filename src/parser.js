@@ -39,6 +39,11 @@ const BLOCK_RULES = [
     },
 ];
 
+// 视频/文章链接的统一渲染，[ac=]（feedSquare 紧凑方言）与 [resource]（pc-direct 详情完整方言）共用
+const stripTags = (s) => s.replace(/<[^>]+>/g, '');
+const acTagLink = (typePath, id, text) =>
+    `<a class="plaza-ac-link${typePath === 'v' ? ' plaza-ac-video' : ''}" href="//www.acfun.cn/${typePath}/ac${id}" target="_blank">${text}</a>`;
+
 const INLINE_RULES = [
     {
         // @提及
@@ -66,17 +71,25 @@ const INLINE_RULES = [
         toHtml: (_, id) => `<a class="plaza-ac-link" href="//www.acfun.cn/moment/am${id}" target="_blank">am${id}</a>`,
     },
     {
-        // [ac=48879687@video]文字[/ac] 视频/文章链接标签：@video→/v/，@article/无后缀→/a/。
+        // [ac=48879687@video]文字[/ac] 视频/文章链接标签（feedSquare 方言）：@video→/v/，@article/无后缀→/a/。
         // 必须排在裸 ac 号之后：display 文本可能已被先行规则渲染成 <a>（display 恰为
         // ac 号的情形），剥掉标签后由本条统一生成链接，避免嵌套
         pattern: /\[ac=(\d+)(?:@(\w+))?\]([\s\S]*?)\[\/ac\]/gi,
         toHtml: (_, id, suffix, inner) => {
             const type = String(suffix || '').toLowerCase() === 'video' ? 'v' : 'a';
-            const cls = type === 'v' ? 'plaza-ac-link plaza-ac-video' : 'plaza-ac-link';
-            const text = inner.replace(/<[^>]+>/g, '');
-            return `<a class="${cls}" href="//www.acfun.cn/${type}/ac${id}" target="_blank">${text}</a>`;
+            return acTagLink(type, id, stripTags(inner));
         },
         toText: (_, id, suffix, inner) => inner,
+    },
+    {
+        // [resource id=48879687 type=2 icon=...]标题[/resource] 视频/文章链接标签
+        // （pc-direct 详情方言，同链换形：feedSquare 是上面的紧凑 [ac=] 形式）。
+        // type 2=视频 3=文章（与转发 typeMap 一致），其余按文章处理。
+        // 同样排在裸 ac 号之后剥先行标签；icon 属性区用 [^\]]* 吞并，即便其中
+        // 恰好出现 ac 号被先行规则改写也不影响匹配（icon 反正不参与输出）
+        pattern: /\[resource id=(\d+) type=(\d+)[^\]]*\]([\s\S]*?)\[\/resource\]/gi,
+        toHtml: (_, id, type, inner) => acTagLink(String(type) === '2' ? 'v' : 'a', id, stripTags(inner)),
+        toText: (_, id, type, inner) => inner,
     },
 ];
 
