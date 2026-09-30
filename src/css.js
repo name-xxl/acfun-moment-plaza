@@ -1,3 +1,5 @@
+import { ICONS } from './icons.js';
+
 const layoutStyles = `
     .moment-plaza-container {
         padding: 0 20px;
@@ -775,6 +777,18 @@ const contentStyles = `
     .plaza-ac-link:hover {
         color: #409bef;
         text-decoration: underline;
+    }
+    /* 视频链接（[ac=id@video]）前置 A 站原生播放图标，mask + currentColor 跟随链接色 */
+    .plaza-ac-video::before {
+        content: '';
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        margin-right: 2px;
+        vertical-align: -2px;
+        background-color: currentColor;
+        -webkit-mask: url("${ICONS.play}") center/contain no-repeat;
+        mask: url("${ICONS.play}") center/contain no-repeat;
     }
     .ubb-emotion {
         max-width: 48px;

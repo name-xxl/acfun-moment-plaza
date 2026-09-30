@@ -1,13 +1,14 @@
 import { CONFIG } from './config.js';
 import { state } from './state.js';
 import { utils } from './utils.js';
+import { storage } from './storage.js';
 import { db } from './db.js';
 import { api } from './api.js';
 
 export const background = {
     // 启动：后台定时拉最新动态（feedSquare 第一页）+ 过期清理
     start() {
-        const lastDiscovery = utils.getLastDiscoveryAt();
+        const lastDiscovery = storage.getLastDiscoveryAt();
         if (lastDiscovery) {
             const idleMs = Date.now() - lastDiscovery;
             state._upBackoffMs = this._computeBackoff(idleMs);
@@ -63,7 +64,7 @@ export const background = {
         };
 
         const backoffAndSettle = () => {
-            const lastDisc = utils.getLastDiscoveryAt();
+            const lastDisc = storage.getLastDiscoveryAt();
             const idleMs = lastDisc ? Date.now() - lastDisc : 0;
             state._upBackoffMs = this._computeBackoff(idleMs);
             state._upNextAt = Date.now() + state._upBackoffMs;
@@ -94,7 +95,7 @@ export const background = {
             const freshCount = page.records.filter(r => r.amId > state.latestAmId).length;
             if (freshCount) {
                 state.latestAmId = maxAmId;
-                utils.setLastDiscoveryAt(Date.now());
+                storage.setLastDiscoveryAt(Date.now());
                 state._upBackoffMs = 0;
                 state._upNextAt = 0;
                 updateUp(`↑发现 ${freshCount} 条新动态，点击刷新`);
@@ -112,7 +113,7 @@ export const background = {
     // ========== 过期清理 ==========
     async cleanupExpired() {
         try {
-            const keepDays = utils.getKeepDays();
+            const keepDays = storage.getKeepDays();
             const cutoff = Date.now() - keepDays * 86400000;
             await db.deleteOlderThan(cutoff);
         } catch (e) {

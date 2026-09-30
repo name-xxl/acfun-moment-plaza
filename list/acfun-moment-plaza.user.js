@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AcFun 动态广场
 // @namespace    https://www.acfun.cn/
-// @version      3.4.0
+// @version      3.5.0
 // @description  按am号查找动态，按时间排序显示，IndexedDB 预加载缓存
 // @author       name_xxl
 // @match        https://www.acfun.cn/member*
@@ -20,6 +20,12 @@
 
 "use strict";
 (() => {
+  // src/icons.js
+  var ICONS = {
+    // v/list60 播放计数图标（动态里 [ac=id@video] 视频链接前缀同款）
+    play: "https://ali-imgs.acfun.cn/kos/nlav10360/static/img/icon_view_player.4a9692bb.svg"
+  };
+
   // src/css.js
   var layoutStyles = `
     .moment-plaza-container {
@@ -795,6 +801,18 @@
         color: #409bef;
         text-decoration: underline;
     }
+    /* 视频链接（[ac=id@video]）前置 A 站原生播放图标，mask + currentColor 跟随链接色 */
+    .plaza-ac-video::before {
+        content: '';
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        margin-right: 2px;
+        vertical-align: -2px;
+        background-color: currentColor;
+        -webkit-mask: url("${ICONS.play}") center/contain no-repeat;
+        mask: url("${ICONS.play}") center/contain no-repeat;
+    }
     .ubb-emotion {
         max-width: 48px;
         max-height: 48px;
@@ -908,9 +926,7 @@
     MAX_IMAGE_SIZE: 5 * 1024 * 1024
     // 评论图片大小上限（原生提示 5M）
   };
-  var KEEP_DAYS_KEY = "moment_plaza_keep_days";
   var AUTO_ENTER_KEY = "moment_plaza_auto_enter";
-  var LAST_DISCOVERY_KEY = "moment_plaza_last_discovery";
   var SEL_MAIN_FEEDS = ".ac-member-main .ac-member-feeds";
   var NAME_COLOR_PURPLE = "#964cfd";
   var NAME_COLOR_RED = "#fd4c5c";
@@ -943,11 +959,8 @@
     // 表情面板数据 [{ name, items: [{ id, url, big, name }] }]
   };
 
-  // src/utils.js
-  var utils = {
-    log(...args) {
-      console.log("%c[MomentPlaza]", "color:#ff4b76;font-weight:bold", ...args);
-    },
+  // src/format.js
+  var format = {
     // 绝对时间戳 → 相对时间 / 日期
     formatTime(timestamp) {
       if (!timestamp) return "";
@@ -997,63 +1010,13 @@
       if (!num) return "0";
       if (num >= 1e4) return (num / 1e4).toFixed(1) + "万";
       return num.toString();
-    },
-    escapeHtml(text) {
-      if (!text) return "";
-      const div = document.createElement("div");
-      div.textContent = text;
-      return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-    },
-    // 统一属性值转义（HTML 标签内用）
-    attrEscape(value) {
-      return this.escapeHtml(String(value));
-    },
-    // 把已有 HTML 标签替换成占位符，避免链接规则误伤属性里的关键词
-    _withProtectedTags(html, callback) {
-      const tags = [];
-      const placeholder = () => `<!--PLAZA_TAG_${tags.length}-->`;
-      const withoutTags = html.replace(/<[^>]+>/g, (match) => {
-        const p = placeholder();
-        tags.push(match);
-        return p;
-      });
-      const result = callback(withoutTags);
-      return result.replace(/<!--PLAZA_TAG_(\d+)-->/g, (_, i) => tags[parseInt(i)]);
-    },
-    // 解析动态内容（表情、图片、@提及、#话题#、ac号）
-    parseContent(text) {
-      if (!text) return "";
-      let html = utils.escapeHtml(text);
-      html = html.replace(/\[表情\]/g, '<span style="color:#999;font-size:12px;">[表情]</span>');
-      html = html.replace(/\[emot=acfun,(\d+)\/?\]/g, (_, id) => {
-        const emo = state.emoticonMap && state.emoticonMap[id];
-        return emo ? `<img class="ubb-emotion" data-pkgname="${emo.pkg.replace(/"/g, "%22")}" src="${emo.url.replace(/"/g, "%22")}">` : '<span style="color:#999;font-size:12px;">[表情]</span>';
-      });
-      html = html.replace(/\[emot=(\w+),(\d+)\/?\]/g, '<img class="ubb-emotion" src="//cdn.aixifan.com/dotnet/20130418/umeditor/dialogs/emotion/images/$1/$2.gif">');
-      html = html.replace(/\[img(?:=[^\]]*)?\](https?:\/\/[^[\s]+?)\[\/img\]/gi, (_, url) => {
-        return `<img class="plaza-ubb-img" src="${url.replace(/"/g, "%22")}">`;
-      });
-      html = utils._withProtectedTags(html, (protectedHtml) => {
-        let h = protectedHtml;
-        h = h.replace(/\[at uid=(\d+)\]@?(.*?)\[\/at\]/g, (_, uid, name) => {
-          return `<a class="plaza-at-link" href="//www.acfun.cn/u/${uid}" target="_blank">@${utils.escapeHtml(name)}</a>`;
-        });
-        h = h.replace(/#([^#\s]{1,30}?)#/g, (_, topic) => {
-          return `<a class="plaza-topic-link" href="//www.acfun.cn/search?keyword=${encodeURIComponent(topic)}" target="_blank">#${topic}#</a>`;
-        });
-        h = h.replace(/\b(?:([va])\/)?(ac\d{4,})\b/gi, (_, prefix, id) => {
-          const type = (prefix || "a").toLowerCase();
-          const display = prefix ? `${prefix}/${id}` : id;
-          return `<a class="plaza-ac-link" href="//www.acfun.cn/${type}/${id}" target="_blank">${display}</a>`;
-        });
-        h = h.replace(/m\.acfun\.cn\/communityCircle\/moment\/(\d+)/g, (_, id) => {
-          return `<a class="plaza-ac-link" href="//www.acfun.cn/moment/am${id}" target="_blank">am${id}</a>`;
-        });
-        return h;
-      });
-      html = html.replace(/\r?\n/g, "<br>");
-      return html;
-    },
+    }
+  };
+
+  // src/storage.js
+  var KEEP_DAYS_KEY = "moment_plaza_keep_days";
+  var LAST_DISCOVERY_KEY = "moment_plaza_last_discovery";
+  var storage = {
     getKeepDays() {
       try {
         const d = GM_getValue(KEEP_DAYS_KEY, CONFIG.KEEP_DAYS_DEFAULT);
@@ -1145,6 +1108,23 @@
         };
         req.onerror = () => reject(req.error);
       });
+    }
+  };
+
+  // src/utils.js
+  var utils = {
+    log(...args) {
+      console.log("%c[MomentPlaza]", "color:#ff4b76;font-weight:bold", ...args);
+    },
+    escapeHtml(text) {
+      if (!text) return "";
+      const div = document.createElement("div");
+      div.textContent = text;
+      return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    },
+    // 统一属性值转义（HTML 标签内用）
+    attrEscape(value) {
+      return this.escapeHtml(String(value));
     }
   };
 
@@ -1517,6 +1497,114 @@
     }
   };
 
+  // src/parser.js
+  var BLOCK_RULES = [
+    {
+      // 字面量 [表情]（API 直接给的明文，非 UBB），渲染为灰字占位
+      pattern: /\[表情\]/g,
+      toHtml: () => '<span style="color:#999;font-size:12px;">[表情]</span>'
+    },
+    {
+      // AcFun 主表情包 [emot=acfun,ID/]，查表情映射表，无映射降级灰字占位
+      pattern: /\[emot=acfun,(\d+)\/?\]/g,
+      toHtml: (_, id) => {
+        const emo = state.emoticonMap && state.emoticonMap[id];
+        return emo ? `<img class="ubb-emotion" data-pkgname="${emo.pkg.replace(/"/g, "%22")}" src="${emo.url.replace(/"/g, "%22")}">` : '<span style="color:#999;font-size:12px;">[表情]</span>';
+      },
+      toText: () => ""
+    },
+    {
+      // 非 acfun 主包的老表情走 umeditor 静态路径（与原生 fallback 一致）
+      pattern: /\[emot=(\w+),(\d+)\/?\]/g,
+      toHtml: '<img class="ubb-emotion" src="//cdn.aixifan.com/dotnet/20130418/umeditor/dialogs/emotion/images/$1/$2.gif">',
+      toText: () => ""
+    },
+    {
+      // UBB 图片，兼容 [img=图片] 与无属性 [img] 两种写法
+      pattern: /\[img(?:=[^\]]*)?\](https?:\/\/[^[\s]+?)\[\/img\]/gi,
+      toHtml: (_, url) => `<img class="plaza-ubb-img" src="${url.replace(/"/g, "%22")}">`,
+      toText: () => "[图]"
+    }
+  ];
+  var INLINE_RULES = [
+    {
+      // @提及
+      pattern: /\[at uid=(\d+)\]@?(.*?)\[\/at\]/g,
+      toHtml: (_, uid, name) => `<a class="plaza-at-link" href="//www.acfun.cn/u/${uid}" target="_blank">@${utils.escapeHtml(name)}</a>`,
+      toText: (_, uid, name) => `@${name}`
+    },
+    {
+      // #话题#（纯文本下原样保留即可读）
+      pattern: /#([^#\s]{1,30}?)#/g,
+      toHtml: (_, topic) => `<a class="plaza-topic-link" href="//www.acfun.cn/search?keyword=${encodeURIComponent(topic)}" target="_blank">#${topic}#</a>`
+    },
+    {
+      // 裸 ac 号与 v/ac号/a/ac号（要求 ac 后紧跟数字，故不会吃进 [ac=...] 标签本身）
+      pattern: /\b(?:([va])\/)?(ac\d{4,})\b/gi,
+      toHtml: (_, prefix, id) => {
+        const type = (prefix || "a").toLowerCase();
+        const display = prefix ? `${prefix}/${id}` : id;
+        return `<a class="plaza-ac-link" href="//www.acfun.cn/${type}/${id}" target="_blank">${display}</a>`;
+      }
+    },
+    {
+      // 动态短链
+      pattern: /m\.acfun\.cn\/communityCircle\/moment\/(\d+)/g,
+      toHtml: (_, id) => `<a class="plaza-ac-link" href="//www.acfun.cn/moment/am${id}" target="_blank">am${id}</a>`
+    },
+    {
+      // [ac=48879687@video]文字[/ac] 视频/文章链接标签：@video→/v/，@article/无后缀→/a/。
+      // 必须排在裸 ac 号之后：display 文本可能已被先行规则渲染成 <a>（display 恰为
+      // ac 号的情形），剥掉标签后由本条统一生成链接，避免嵌套
+      pattern: /\[ac=(\d+)(?:@(\w+))?\]([\s\S]*?)\[\/ac\]/gi,
+      toHtml: (_, id, suffix, inner) => {
+        const type = String(suffix || "").toLowerCase() === "video" ? "v" : "a";
+        const cls = type === "v" ? "plaza-ac-link plaza-ac-video" : "plaza-ac-link";
+        const text = inner.replace(/<[^>]+>/g, "");
+        return `<a class="${cls}" href="//www.acfun.cn/${type}/ac${id}" target="_blank">${text}</a>`;
+      },
+      toText: (_, id, suffix, inner) => inner
+    }
+  ];
+  var applyRules = (str, rules, mode) => rules.reduce(
+    (s, r) => s.replace(r.pattern, mode === "html" ? r.toHtml : r.toText ?? ((m) => m)),
+    str
+  );
+  var parser = {
+    // 把已有 HTML 标签替换成占位符，避免链接规则误伤属性里的关键词
+    _withProtectedTags(html, callback) {
+      const tags = [];
+      const placeholder = () => `<!--PLAZA_TAG_${tags.length}-->`;
+      const withoutTags = html.replace(/<[^>]+>/g, (match) => {
+        const p = placeholder();
+        tags.push(match);
+        return p;
+      });
+      const result = callback(withoutTags);
+      return result.replace(/<!--PLAZA_TAG_(\d+)-->/g, (_, i) => tags[parseInt(i)]);
+    },
+    // 富文本解析（动态正文/评论）：转义 → 块级规则 → 标签保护块内跑链接规则 → 换行
+    parseContent(text) {
+      if (!text) return "";
+      let html = utils.escapeHtml(text);
+      html = applyRules(html, BLOCK_RULES, "html");
+      html = this._withProtectedTags(html, (h) => applyRules(h, INLINE_RULES, "html"));
+      return html.replace(/\r?\n/g, "<br>");
+    },
+    // 纯文本剥离（转发卡片标题等单行展示）：吃原始文本、吐纯文本，调用方负责 escapeHtml
+    plainText(text) {
+      if (!text) return "";
+      return applyRules(applyRules(text, BLOCK_RULES, "text"), INLINE_RULES, "text").replace(/\s+/g, " ").trim();
+    },
+    // UBB 词汇表：脚本内生成 UBB（插表情/带图评论）统一走这里，与上方规则 pattern 同源
+    emotUbb(pkg, code) {
+      return `[emot=${pkg},${code}/]`;
+    },
+    imgUbb(url) {
+      return `[img=图片]${url}[/img]`;
+    }
+  };
+
   // src/editor.js
   var EDITOR_CLASS = "plaza-comment-editor";
   var EDITOR_INPUT_CLASS = "plaza-editor-input";
@@ -1568,7 +1656,7 @@
     },
     // 保留天数下拉框的 option 列表（工具栏与首次设置框共用）
     keepDaysOptionsHtml() {
-      const keepDays = utils.getKeepDays();
+      const keepDays = storage.getKeepDays();
       return CONFIG.KEEP_DAYS_OPTIONS.map((d) => `<option value="${d}"${d === keepDays ? " selected" : ""}>${d}</option>`).join("");
     },
     // 把某个互动区元素里的数字（文本节点）替换为加载点
@@ -1605,9 +1693,9 @@
                 </div>`;
         }
         return `<div class="feed-interactive">
-                <div class="feed-interactive-comment"><span>评论 ${utils.formatNumber(commentCount)}</span></div>
-                <div class="feed-interactive-banana"><span>投蕉 ${utils.formatNumber(bananaCount)}</span></div>
-                <div class="feed-interactive-like"><span>赞 ${utils.formatNumber(likeCount)}</span></div>
+                <div class="feed-interactive-comment"><span>评论 ${format.formatNumber(commentCount)}</span></div>
+                <div class="feed-interactive-banana"><span>投蕉 ${format.formatNumber(bananaCount)}</span></div>
+                <div class="feed-interactive-like"><span>赞 ${format.formatNumber(likeCount)}</span></div>
                 <div class="feed-interactive-repost"><span>分享</span></div>
             </div>`;
       }
@@ -1621,7 +1709,7 @@
           const nodes = commentDiv.childNodes;
           for (let i = nodes.length - 1; i >= 0; i--) {
             if (nodes[i].nodeType === 3 && nodes[i].textContent.trim()) {
-              nodes[i].textContent = utils.formatNumber(commentCount) + COUNT_SUFFIX;
+              nodes[i].textContent = format.formatNumber(commentCount) + COUNT_SUFFIX;
               break;
             }
           }
@@ -1636,7 +1724,7 @@
             span.textContent = "";
             span.className = "plaza-count-loading";
           } else {
-            span.textContent = utils.formatNumber(bananaCount);
+            span.textContent = format.formatNumber(bananaCount);
           }
         }
       }
@@ -1649,7 +1737,7 @@
           const nodes = likeDiv.childNodes;
           for (let i = nodes.length - 1; i >= 0; i--) {
             if (nodes[i].nodeType === 3 && nodes[i].textContent.trim()) {
-              nodes[i].textContent = utils.formatNumber(likeCount) + COUNT_SUFFIX;
+              nodes[i].textContent = format.formatNumber(likeCount) + COUNT_SUFFIX;
               break;
             }
           }
@@ -1666,11 +1754,6 @@
             </div>
         `;
     },
-    // UBB 标记 → 纯文本（用于转发卡片标题等单行展示）
-    _plainText(text) {
-      if (!text) return "";
-      return String(text).replace(/\[img=[^\]]*\][\s\S]*?\[\/img\]/gi, "[图]").replace(/\[at uid=\d+\]@?([\s\S]*?)\[\/at\]/g, "@$1").replace(/\[emot=\w+,\d+\/?\]/g, "").replace(/\s+/g, " ").trim();
-    },
     // 提取转发内容信息（repostSource 由 api 层附加到 moment 上）
     // 类型映射：resourceType 2=视频 3=文章 10=动态（originResourceType 1/2/3 只是文章/漫画/视频的转发来源差异，统一走这里）
     _getRepostInfo(moment) {
@@ -1680,7 +1763,7 @@
       let title = rs.articleTitle || rs.caption || rs.description || "";
       let cover = rs.coverUrl || "";
       if (isMomentRepost) {
-        title = this._plainText(rs.moment?.text) || rs.discoveryResourceFeedShowContent || title;
+        title = parser.plainText(rs.moment?.text) || rs.discoveryResourceFeedShowContent || title;
         cover = cover || rs.moment?.imgs?.[0]?.url || "";
       }
       if (!title && !cover) return null;
@@ -1726,7 +1809,7 @@
       const repost = this._getRepostInfo(moment);
       const repostHtml = repost ? this._repostCardHtml(repost) : "";
       const rawText = moment.text || moment.replaceUbbText || "";
-      const text = utils.parseContent(rawText);
+      const text = parser.parseContent(rawText);
       const images = moment.imgs || [];
       let imageHtml = "";
       if (images.length > 0) {
@@ -1741,8 +1824,8 @@
       const amId = record.amId || moment.momentId;
       const nameColor = user.nameColor;
       const nameColorStyle = nameColor === 2 ? `color:${NAME_COLOR_PURPLE};` : `color:${NAME_COLOR_RED};`;
-      const absTs = record.absTs || utils.computeAbsTs(moment.createTime, Date.now());
-      const createTime = utils.formatTime(absTs) || moment.createTime || "";
+      const absTs = record.absTs || format.computeAbsTs(moment.createTime, Date.now());
+      const createTime = format.formatTime(absTs) || moment.createTime || "";
       const interactiveHtml = this.fillInteractive(moment, { pending });
       return `
             <div class="ac-member-feed moment-plaza-item" data-am-id="${amId}">
@@ -1785,7 +1868,7 @@
       const userId = comment.userId || "";
       const avatar = utils.attrEscape(comment.userHeadImgInfo?.thumbnailImageCdnUrl || comment.headUrl?.[0]?.url || "");
       const rawContent = comment.content || "";
-      const content = utils.parseContent(rawContent);
+      const content = parser.parseContent(rawContent);
       const likeCount = comment.likeCount || 0;
       const time = comment.postDate || "";
       const floor = comment.floor || "";
@@ -1880,7 +1963,7 @@
   var background = {
     // 启动：后台定时拉最新动态（feedSquare 第一页）+ 过期清理
     start() {
-      const lastDiscovery = utils.getLastDiscoveryAt();
+      const lastDiscovery = storage.getLastDiscoveryAt();
       if (lastDiscovery) {
         const idleMs = Date.now() - lastDiscovery;
         state._upBackoffMs = this._computeBackoff(idleMs);
@@ -1927,7 +2010,7 @@
         if (el) el.textContent = t;
       };
       const backoffAndSettle = () => {
-        const lastDisc = utils.getLastDiscoveryAt();
+        const lastDisc = storage.getLastDiscoveryAt();
         const idleMs = lastDisc ? Date.now() - lastDisc : 0;
         state._upBackoffMs = this._computeBackoff(idleMs);
         state._upNextAt = Date.now() + state._upBackoffMs;
@@ -1952,7 +2035,7 @@
         const freshCount = page.records.filter((r) => r.amId > state.latestAmId).length;
         if (freshCount) {
           state.latestAmId = maxAmId;
-          utils.setLastDiscoveryAt(Date.now());
+          storage.setLastDiscoveryAt(Date.now());
           state._upBackoffMs = 0;
           state._upNextAt = 0;
           updateUp(`↑发现 ${freshCount} 条新动态，点击刷新`);
@@ -1969,7 +2052,7 @@
     // ========== 过期清理 ==========
     async cleanupExpired() {
       try {
-        const keepDays = utils.getKeepDays();
+        const keepDays = storage.getKeepDays();
         const cutoff = Date.now() - keepDays * 864e5;
         await db.deleteOlderThan(cutoff);
       } catch (e) {
@@ -2058,7 +2141,7 @@
       this._markNoMoreIfPastWindow(page.records);
       const maxAmId = page.records.length ? Math.max(...page.records.map((r) => r.amId)) : 0;
       if (maxAmId > state.latestAmId) state.latestAmId = maxAmId;
-      utils.setLastDiscoveryAt(Date.now());
+      storage.setLastDiscoveryAt(Date.now());
       this._renderList();
       const statusEl = document.getElementById("fetch-status");
       if (statusEl) statusEl.textContent = `共 ${state.moments.length} 条动态，向下滚动加载更多`;
@@ -2096,7 +2179,7 @@
       if (!data || data.result !== 0 || !data.moment) return;
       const moment = data.moment;
       const record = state.moments.find((m) => m.amId == amId);
-      const absTs = record?.absTs || utils.computeAbsTs(moment.createTime, Date.now());
+      const absTs = record?.absTs || format.computeAbsTs(moment.createTime, Date.now());
       await db.putMoment({ amId, absTs, data: moment, fetchedAt: Date.now() });
       if (record) record.data = moment;
       const card = document.querySelector(`.moment-plaza-item[data-am-id="${amId}"]`);
@@ -2127,7 +2210,7 @@
       const sel = document.getElementById("plaza-keep-days");
       if (!sel) return;
       sel.addEventListener("change", (e) => {
-        utils.setKeepDays(parseInt(e.target.value) || CONFIG.KEEP_DAYS_DEFAULT);
+        storage.setKeepDays(parseInt(e.target.value) || CONFIG.KEEP_DAYS_DEFAULT);
         background.cleanupExpired();
       });
     },
@@ -2506,7 +2589,7 @@
         const emotItem = e.target.closest(".plaza-emot-item");
         if (emotItem) {
           const input = emotItem.closest(".plaza-comment-editor")?.querySelector(".plaza-editor-input");
-          if (input) this._insertAtCursor(input, `[emot=acfun,${emotItem.dataset.code}/]`);
+          if (input) this._insertAtCursor(input, parser.emotUbb("acfun", emotItem.dataset.code));
           emotpanel.pick(emotItem.dataset.code);
           return;
         }
@@ -2691,7 +2774,7 @@
           let content = input?.value?.trim() || "";
           const hasImg = !!pendingBox && pendingBox.style.display !== "none" && pendingImg?.src;
           if (!content && !hasImg) return;
-          if (hasImg) content = (content ? content + "\r\n" : "") + `[img=图片]${pendingImg.src}[/img]`;
+          if (hasImg) content = (content ? content + "\r\n" : "") + parser.imgUbb(pendingImg.src);
           editorSend.disabled = true;
           editorSend.textContent = "...";
           const result = await api.postComment(amId, content, replyTo ? parseInt(replyTo) : 0);

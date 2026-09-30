@@ -1,5 +1,8 @@
 import { CONFIG, NAME_COLOR_PURPLE, NAME_COLOR_RED } from './config.js';
 import { utils } from './utils.js';
+import { format } from './format.js';
+import { storage } from './storage.js';
+import { parser } from './parser.js';
 import { editor } from './editor.js';
 
 // 原生 HTML 里数字文本节点后带的空白，替换数字时保留以维持排版
@@ -23,7 +26,7 @@ export const renderer = {
 
     // 保留天数下拉框的 option 列表（工具栏与首次设置框共用）
     keepDaysOptionsHtml() {
-        const keepDays = utils.getKeepDays();
+        const keepDays = storage.getKeepDays();
         return CONFIG.KEEP_DAYS_OPTIONS
             .map(d => `<option value="${d}"${d === keepDays ? ' selected' : ''}>${d}</option>`)
             .join('');
@@ -66,9 +69,9 @@ export const renderer = {
                 </div>`;
             }
             return `<div class="feed-interactive">
-                <div class="feed-interactive-comment"><span>评论 ${utils.formatNumber(commentCount)}</span></div>
-                <div class="feed-interactive-banana"><span>投蕉 ${utils.formatNumber(bananaCount)}</span></div>
-                <div class="feed-interactive-like"><span>赞 ${utils.formatNumber(likeCount)}</span></div>
+                <div class="feed-interactive-comment"><span>评论 ${format.formatNumber(commentCount)}</span></div>
+                <div class="feed-interactive-banana"><span>投蕉 ${format.formatNumber(bananaCount)}</span></div>
+                <div class="feed-interactive-like"><span>赞 ${format.formatNumber(likeCount)}</span></div>
                 <div class="feed-interactive-repost"><span>分享</span></div>
             </div>`;
         }
@@ -85,7 +88,7 @@ export const renderer = {
                 const nodes = commentDiv.childNodes;
                 for (let i = nodes.length - 1; i >= 0; i--) {
                     if (nodes[i].nodeType === 3 && nodes[i].textContent.trim()) {
-                        nodes[i].textContent = utils.formatNumber(commentCount) + COUNT_SUFFIX;
+                        nodes[i].textContent = format.formatNumber(commentCount) + COUNT_SUFFIX;
                         break;
                     }
                 }
@@ -102,7 +105,7 @@ export const renderer = {
                     span.textContent = '';
                     span.className = 'plaza-count-loading';
                 } else {
-                    span.textContent = utils.formatNumber(bananaCount);
+                    span.textContent = format.formatNumber(bananaCount);
                 }
             }
         }
@@ -117,7 +120,7 @@ export const renderer = {
                 const nodes = likeDiv.childNodes;
                 for (let i = nodes.length - 1; i >= 0; i--) {
                     if (nodes[i].nodeType === 3 && nodes[i].textContent.trim()) {
-                        nodes[i].textContent = utils.formatNumber(likeCount) + COUNT_SUFFIX;
+                        nodes[i].textContent = format.formatNumber(likeCount) + COUNT_SUFFIX;
                         break;
                     }
                 }
@@ -137,17 +140,6 @@ export const renderer = {
         `;
     },
 
-    // UBB 标记 → 纯文本（用于转发卡片标题等单行展示）
-    _plainText(text) {
-        if (!text) return '';
-        return String(text)
-            .replace(/\[img=[^\]]*\][\s\S]*?\[\/img\]/gi, '[图]')
-            .replace(/\[at uid=\d+\]@?([\s\S]*?)\[\/at\]/g, '@$1')
-            .replace(/\[emot=\w+,\d+\/?\]/g, '')
-            .replace(/\s+/g, ' ')
-            .trim();
-    },
-
     // 提取转发内容信息（repostSource 由 api 层附加到 moment 上）
     // 类型映射：resourceType 2=视频 3=文章 10=动态（originResourceType 1/2/3 只是文章/漫画/视频的转发来源差异，统一走这里）
     _getRepostInfo(moment) {
@@ -159,7 +151,7 @@ export const renderer = {
         let cover = rs.coverUrl || '';
         if (isMomentRepost) {
             // 转发动态：原文和首图在嵌套 moment 里，作者在 repostSource.user（嵌套 moment.user 为 null）
-            title = this._plainText(rs.moment?.text) || rs.discoveryResourceFeedShowContent || title;
+            title = parser.plainText(rs.moment?.text) || rs.discoveryResourceFeedShowContent || title;
             cover = cover || rs.moment?.imgs?.[0]?.url || '';
         }
         if (!title && !cover) return null;
@@ -212,7 +204,7 @@ export const renderer = {
         const repostHtml = repost ? this._repostCardHtml(repost) : '';
 
         const rawText = moment.text || moment.replaceUbbText || '';
-        const text = utils.parseContent(rawText);
+        const text = parser.parseContent(rawText);
 
         const images = moment.imgs || [];
         let imageHtml = '';
@@ -232,8 +224,8 @@ export const renderer = {
         const nameColorStyle = nameColor === 2 ? `color:${NAME_COLOR_PURPLE};` : `color:${NAME_COLOR_RED};`;
 
         // 展示时间：优先用存储的绝对时间戳动态计算，保证准确
-        const absTs = record.absTs || utils.computeAbsTs(moment.createTime, Date.now());
-        const createTime = utils.formatTime(absTs) || moment.createTime || '';
+        const absTs = record.absTs || format.computeAbsTs(moment.createTime, Date.now());
+        const createTime = format.formatTime(absTs) || moment.createTime || '';
 
         const interactiveHtml = this.fillInteractive(moment, { pending });
 
@@ -279,7 +271,7 @@ export const renderer = {
         const userId = comment.userId || '';
         const avatar = utils.attrEscape(comment.userHeadImgInfo?.thumbnailImageCdnUrl || comment.headUrl?.[0]?.url || '');
         const rawContent = comment.content || '';
-        const content = utils.parseContent(rawContent);
+        const content = parser.parseContent(rawContent);
         const likeCount = comment.likeCount || 0;
         const time = comment.postDate || '';
         const floor = comment.floor || '';

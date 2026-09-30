@@ -25,9 +25,7 @@ export const CONFIG = {
     MAX_IMAGE_SIZE: 5 * 1024 * 1024,    // 评论图片大小上限（原生提示 5M）
 };
 
-export const KEEP_DAYS_KEY = 'moment_plaza_keep_days';
 export const AUTO_ENTER_KEY = 'moment_plaza_auto_enter';
-export const LAST_DISCOVERY_KEY = 'moment_plaza_last_discovery';
 
 export const SEL_MAIN_FEEDS = '.ac-member-main .ac-member-feeds';
 

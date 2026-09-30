@@ -1,6 +1,7 @@
 import { CONFIG } from './config.js';
 import { state } from './state.js';
 import { api } from './api.js';
+import { parser } from './parser.js';
 import { renderer, COUNT_SUFFIX } from './renderer.js';
 import { controller } from './controller.js';
 import { emotpanel } from './emotpanel.js';
@@ -70,7 +71,7 @@ export const events = {
             const emotItem = e.target.closest('.plaza-emot-item');
             if (emotItem) {
                 const input = emotItem.closest('.plaza-comment-editor')?.querySelector('.plaza-editor-input');
-                if (input) this._insertAtCursor(input, `[emot=acfun,${emotItem.dataset.code}/]`);
+                if (input) this._insertAtCursor(input, parser.emotUbb('acfun', emotItem.dataset.code));
                 emotpanel.pick(emotItem.dataset.code);
                 return;
             }
@@ -280,7 +281,7 @@ export const events = {
                 const hasImg = !!pendingBox && pendingBox.style.display !== 'none' && pendingImg?.src;
                 if (!content && !hasImg) return;
                 // 待发图片以原生带图评论的 UBB 格式追加
-                if (hasImg) content = (content ? content + '\r\n' : '') + `[img=图片]${pendingImg.src}[/img]`;
+                if (hasImg) content = (content ? content + '\r\n' : '') + parser.imgUbb(pendingImg.src);
 
                 editorSend.disabled = true;
                 editorSend.textContent = '...';

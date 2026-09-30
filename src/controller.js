@@ -1,6 +1,7 @@
 import { CONFIG, SEL_MAIN_FEEDS, AUTO_ENTER_KEY } from './config.js';
 import { state } from './state.js';
-import { utils } from './utils.js';
+import { format } from './format.js';
+import { storage } from './storage.js';
 import { db } from './db.js';
 import { api } from './api.js';
 import { renderer } from './renderer.js';
@@ -103,7 +104,7 @@ export const controller = {
         // 已展示到的最大号即轮询 diff 基准，避免把用户刚刷新看过的动态误报为新发现
         const maxAmId = page.records.length ? Math.max(...page.records.map(r => r.amId)) : 0;
         if (maxAmId > state.latestAmId) state.latestAmId = maxAmId;
-        utils.setLastDiscoveryAt(Date.now());
+        storage.setLastDiscoveryAt(Date.now());
 
         this._renderList();
         const statusEl = document.getElementById('fetch-status');
@@ -147,7 +148,7 @@ export const controller = {
         const moment = data.moment;
 
         const record = state.moments.find(m => m.amId == amId);
-        const absTs = record?.absTs || utils.computeAbsTs(moment.createTime, Date.now());
+        const absTs = record?.absTs || format.computeAbsTs(moment.createTime, Date.now());
         await db.putMoment({ amId, absTs, data: moment, fetchedAt: Date.now() });
         if (record) record.data = moment;
 
@@ -182,7 +183,7 @@ export const controller = {
         const sel = document.getElementById('plaza-keep-days');
         if (!sel) return;
         sel.addEventListener('change', (e) => {
-            utils.setKeepDays(parseInt(e.target.value) || CONFIG.KEEP_DAYS_DEFAULT);
+            storage.setKeepDays(parseInt(e.target.value) || CONFIG.KEEP_DAYS_DEFAULT);
             background.cleanupExpired();
         });
     },

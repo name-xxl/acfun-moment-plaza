@@ -4,7 +4,7 @@
 
 ## 开发与构建
 
-源码按模块拆分在 `src/` 下（config / state / utils / css / db / api / emotpanel / renderer / background / navigation / controller / events / main），用 esbuild 打包成单文件油猴脚本：
+源码按模块拆分在 `src/` 下（config / state / utils / format / storage / parser / icons / css / db / api / emotpanel / renderer / background / navigation / controller / events / main），用 esbuild 打包成单文件油猴脚本：
 
 ```bash
 nvm use 24 && npm install
@@ -374,7 +374,9 @@ body: sourceId={am号}&sourceType=4&commentId={评论ID}
 
 ## 内容解析
 
-`parseContent()` 函数处理动态/评论文本：
+内容解析规则表化：每种 UBB 格式在 `src/parser.js` 的规则表中登记一条（含富文本渲染 `toHtml` 与纯文本剥离 `toText`），`parseContent()`（正文/评论）与 `plainText()`（转发卡片标题）从同一张表派生，新增格式只改一处。脚本内生成 UBB（插表情/带图评论）也走 parser 的词汇表函数（`emotUbb`/`imgUbb`），保证与解析规则同源。
+
+`parseContent()` 处理动态/评论文本：
 
 | 格式 | 转换结果 |
 |------|---------|
@@ -382,6 +384,7 @@ body: sourceId={am号}&sourceType=4&commentId={评论ID}
 | `#话题#` | `<a href="/search?keyword=话题">#话题#</a>` |
 | `ac12345` | `<a href="/a/ac12345">ac12345</a>` |
 | `v/ac12345` / `a/ac12345` | 对应链接 |
+| `[ac=48879687@video]文字[/ac]` | `<a href="/v/ac48879687">文字</a>`，前置原生播放图标；`@article`/无后缀走 `/a/` |
 | `m.acfun.cn/communityCircle/moment/123` | `www.acfun.cn/moment/am123` |
 | `[emot=acfun,1673/]` | 有表情映射时为 `<img>`，无映射时显示 `[表情]` |
 | `[img=图片]https://...[/img]` | `<img src="https://...">` |
