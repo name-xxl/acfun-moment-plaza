@@ -195,7 +195,7 @@ GET https://www.acfun.cn/rest/pc-direct/moment/detail?momentId={amId}
 - 带 cookie 请求时返回 `isLike`、`isThrowBanana` 字段
 - 不带 cookie 时这两个字段为 `undefined`
 - 图片字段为 `imgs`（数组），每项包含 `url`（缩略图）、`originUrl`（原图）
-- `nameColor`: 1=红色（默认），2=紫色
+- `nameColor`: 0=普通用户（原生不加内联色，默认 #333）、1=红名 `#fd4c5c`、2=紫名 `#964cfd`（2026-09-30 实测 am5101196 评论区：0/1/2 三值并存）
 
 ### 点赞动态
 
@@ -411,6 +411,14 @@ body: sourceId={am号}&sourceType=4&commentId={评论ID}
 - `/member*`：注入侧边栏 + 后台定时拉最新动态
 
 ## 更新日志
+
+### v3.7.1 (2026-09-30)
+
+**用户名颜色枚举修正：**
+
+- `nameColor` 实际是 0/1/2 三值枚举，脚本原先按二值处理（非 2 一律红）：0 的普通用户（无内联色、原生默认 #333）被误染成红名。改为 2=紫、1=红、0/缺失不加内联色（动态卡片 UP 名与评论区根评论/楼中楼同改）
+- 评论区 `.name` 补默认色 `#333`；卡片 UP 名 hover 的 `!important` 去掉，红/紫名悬停保持本色，普通名悬停仍变红
+- `nameColor` 渲染前 `Number()` 归一，防接口返回字符串导致严格相等失配
 
 ### v3.7.0 (2026-09-30)
 

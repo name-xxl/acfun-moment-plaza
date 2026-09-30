@@ -85,8 +85,9 @@ const layoutStyles = `
         text-decoration: none;
     }
 
+    /* 默认名 hover 变红；红/紫名靠内联色压过此规则，保持本色 */
     .member-feed-user .feed-up-info .up-name a:hover {
-        color: #fd4c5c !important;
+        color: #fd4c5c;
     }
 
     .member-feed-user .feed-up-info .feed-time {
@@ -301,6 +302,7 @@ const commentStyles = `
         font-size: 12px;
     }
     .moment-comments .area-comment-title .name {
+        color: #333;
         text-decoration: none;
         margin-right: 2px;
     }

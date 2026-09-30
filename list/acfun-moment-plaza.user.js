@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AcFun 动态广场
 // @namespace    https://www.acfun.cn/
-// @version      3.7.0
+// @version      3.7.1
 // @description  在 AcFun 个人中心添加「动态广场」：全站最新动态瀑布流（feedSquare）、评论互动、IndexedDB 留存
 // @author       name_xxl
 // @match        https://www.acfun.cn/member*
@@ -112,8 +112,9 @@
         text-decoration: none;
     }
 
+    /* 默认名 hover 变红；红/紫名靠内联色压过此规则，保持本色 */
     .member-feed-user .feed-up-info .up-name a:hover {
-        color: #fd4c5c !important;
+        color: #fd4c5c;
     }
 
     .member-feed-user .feed-up-info .feed-time {
@@ -326,6 +327,7 @@
         font-size: 12px;
     }
     .moment-comments .area-comment-title .name {
+        color: #333;
         text-decoration: none;
         margin-right: 2px;
     }
@@ -1772,8 +1774,8 @@
         }
       }
       const amId = record.amId || moment.momentId;
-      const nameColor = user.nameColor;
-      const nameColorStyle = nameColor === 2 ? `color:${NAME_COLOR_PURPLE};` : `color:${NAME_COLOR_RED};`;
+      const nameColor = Number(user.nameColor);
+      const nameColorStyle = nameColor === 2 ? `color:${NAME_COLOR_PURPLE};` : nameColor === 1 ? `color:${NAME_COLOR_RED};` : "";
       const absTs = record.absTs || format.computeAbsTs(moment.createTime, Date.now());
       const createTime = format.formatTime(absTs) || moment.createTime || "";
       const interactiveHtml = this.fillInteractive(moment, { pending });
@@ -1822,7 +1824,7 @@
       const likeCount = comment.likeCount || 0;
       const time = comment.postDate || "";
       const floor = comment.floor || "";
-      const nameColor = comment.nameColor === 2 ? NAME_COLOR_PURPLE : NAME_COLOR_RED;
+      const nameColor = Number(comment.nameColor);
       const device = comment.deviceModel || "";
       const isCommentLiked = comment.isLiked || false;
       const replyToName = comment.replyToUserName || "";
@@ -1834,7 +1836,7 @@
       const subComments = comment.subComments || [];
       const subHtml = subComments.length > 0 ? `<div class="area-comment-sec clearfix"><div class="area-sec-list">${subComments.map((s) => this.renderComment(s, amId, true)).join("")}</div></div>` : "";
       const secClass = isSec ? " sec" : "";
-      const nameStyle = ` style="color:${nameColor}"`;
+      const nameStyle = nameColor === 2 ? ` style="color:${NAME_COLOR_PURPLE}"` : nameColor === 1 ? ` style="color:${NAME_COLOR_RED}"` : "";
       const avatarFrame = isSec ? "" : utils.attrEscape(comment.avatarFrameImgInfo?.thumbnailImage?.cdnUrls?.[0]?.url || "");
       return `
             <div class="area-comment-top clearfix plaza-comment-item${secClass}" data-commentid="${comment.commentId}">

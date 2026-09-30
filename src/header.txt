@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AcFun 动态广场
 // @namespace    https://www.acfun.cn/
-// @version      3.7.0
+// @version      3.7.1
 // @description  在 AcFun 个人中心添加「动态广场」：全站最新动态瀑布流（feedSquare）、评论互动、IndexedDB 留存
 // @author       name_xxl
 // @match        https://www.acfun.cn/member*

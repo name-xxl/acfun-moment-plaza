@@ -227,8 +227,10 @@ export const renderer = {
 
         const amId = record.amId || moment.momentId;
 
-        const nameColor = user.nameColor;
-        const nameColorStyle = nameColor === 2 ? `color:${NAME_COLOR_PURPLE};` : `color:${NAME_COLOR_RED};`;
+        // 原生实测（am5101196）：nameColor 2=紫、1=红，0/缺失不加内联色（吃默认 #333）
+        const nameColor = Number(user.nameColor);
+        const nameColorStyle = nameColor === 2 ? `color:${NAME_COLOR_PURPLE};`
+            : nameColor === 1 ? `color:${NAME_COLOR_RED};` : '';
 
         // 展示时间：优先用存储的绝对时间戳动态计算，保证准确
         const absTs = record.absTs || format.computeAbsTs(moment.createTime, Date.now());
@@ -282,7 +284,7 @@ export const renderer = {
         const likeCount = comment.likeCount || 0;
         const time = comment.postDate || '';
         const floor = comment.floor || '';
-        const nameColor = comment.nameColor === 2 ? NAME_COLOR_PURPLE : NAME_COLOR_RED;
+        const nameColor = Number(comment.nameColor);
         const device = comment.deviceModel || '';
         const isCommentLiked = comment.isLiked || false;
 
@@ -300,8 +302,9 @@ export const renderer = {
             : '';
 
         const secClass = isSec ? ' sec' : '';
-        // 根评论与楼中楼的名字都用内联彩色（红/紫），与原生一致
-        const nameStyle = ` style="color:${nameColor}"`;
+        // 根评论与楼中楼的名字内联彩色与原生一致：2=紫、1=红，0/缺失不加内联色（默认 #333）
+        const nameStyle = nameColor === 2 ? ` style="color:${NAME_COLOR_PURPLE}"`
+            : nameColor === 1 ? ` style="color:${NAME_COLOR_RED}"` : '';
         // 头像框：独立图覆盖在头像上（同原生 avatar-bg 机制）；原生楼中楼不展示头像框
         const avatarFrame = isSec ? '' : utils.attrEscape(comment.avatarFrameImgInfo?.thumbnailImage?.cdnUrls?.[0]?.url || '');
 
