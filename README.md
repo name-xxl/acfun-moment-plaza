@@ -438,6 +438,20 @@ body: sourceId={am号}&sourceType=4&commentId={评论ID}
 - 新增 `test/`（node 内置 test runner）：parser 规则表双方言全用例 + format 纯函数用例，`npm test`
 - 修正文档漂移：header `@description` 仍是逐号探测时代的文案；README 过期清理触发点与实现不符
 
+### v3.6.0 (2026-09-30)
+
+**解析 [resource] 详情方言并刷新正文，视频链接显示标题：**
+
+- 解析 pc-direct 详情接口的 `[resource]` 链接方言（自带标题），与 feedSquare 的 `[ac=id@视频id]` 方言一并入解析规则表
+- 详情刷新管线用详情方言重解析正文：视频链接直接显示标题，老动态下次刷新时补上
+
+### v3.5.0 (2026-09-30)
+
+**解析规则表化并拆分模块，支持 [ac=] 视频/文章链接：**
+
+- UBB 解析改为规则表驱动，新增支持 `[ac=]` 视频/文章链接方言（feedSquare 链接格式）
+- parser / format / storage 拆分为独立模块
+
 ### v3.4.0 (2026-09-23)
 
 **表情面板展示层重构 + 评论区对齐原生（数据链路不变）：**
