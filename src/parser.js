@@ -46,9 +46,10 @@ const acTagLink = (typePath, id, text) =>
 
 const INLINE_RULES = [
     {
-        // @提及
+        // @提及。toHtml 不再转义 name：parseContent 已对全文 escapeHtml 过，
+        // 再转一次会把 & 变成 &amp;quot; 这类双重转义（toText 吃原始文本，不受影响）
         pattern: /\[at uid=(\d+)\]@?(.*?)\[\/at\]/g,
-        toHtml: (_, uid, name) => `<a class="plaza-at-link" href="//www.acfun.cn/u/${uid}" target="_blank">@${utils.escapeHtml(name)}</a>`,
+        toHtml: (_, uid, name) => `<a class="plaza-at-link" href="//www.acfun.cn/u/${uid}" target="_blank">@${name}</a>`,
         toText: (_, uid, name) => `@${name}`,
     },
     {
@@ -100,7 +101,9 @@ const applyRules = (str, rules, mode) => rules.reduce(
 );
 
 export const parser = {
-    // 把已有 HTML 标签替换成占位符，避免链接规则误伤属性里的关键词
+    // 把已有 HTML 标签替换成占位符，避免链接规则误伤属性里的关键词。
+    // 安全前提：占位符形如 <!--...-->，本函数必须在 escapeHtml 之后调用——用户文本里的
+    // "<" 已转义成 &lt;，伪造不出占位符形态，恢复替换不会错位
     _withProtectedTags(html, callback) {
         const tags = [];
         const placeholder = () => `<!--PLAZA_TAG_${tags.length}-->`;

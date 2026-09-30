@@ -8,9 +8,9 @@ export const state = {
     _noMoreDown: false,
     _upRunning: false,    // 正在拉取最新动态
     _upPollTimer: null,   // 向上定时器
-    _upBackoffMs: 0,      // 向上轮询当前退避间隔（空手而归翻倍，命中即复位）
-    _upNextAt: 0,         // 早于该时间戳不发起向上轮询
+    _upNextAt: 0,         // 早于该时间戳不发起向上轮询（空手而归按离线时长推算退避）
     _upGeneration: 0,     // 向上拉取代数，refresh 时递增使旧响应失效
+    _downGeneration: 0,   // 向下翻页代数，refresh 时递增使在途旧批次（旧游标）作废
     emoticonMap: null,    // 表情码→图片 { emotionId: { url, big, name, pkg } }
     emoticonPacks: null,  // 表情面板数据 [{ name, items: [{ id, url, big, name }] }]
 };

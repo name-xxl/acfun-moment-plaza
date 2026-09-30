@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AcFun 动态广场
 // @namespace    https://www.acfun.cn/
-// @version      3.6.0
-// @description  按am号查找动态，按时间排序显示，IndexedDB 预加载缓存
+// @version      3.7.0
+// @description  在 AcFun 个人中心添加「动态广场」：全站最新动态瀑布流（feedSquare）、评论互动、IndexedDB 留存
 // @author       name_xxl
 // @match        https://www.acfun.cn/member*
 // @downloadURL  https://raw.githubusercontent.com/name-xxl/acfun-moment-plaza/main/list/acfun-moment-plaza.user.js
@@ -923,8 +923,24 @@
     // 保留天数可选项
     UPLOAD_CHUNK_SIZE: 1 * 1024 * 1024,
     // 评论图片上传分片大小（与原生一致 1M）
-    MAX_IMAGE_SIZE: 5 * 1024 * 1024
+    MAX_IMAGE_SIZE: 5 * 1024 * 1024,
     // 评论图片大小上限（原生提示 5M）
+    REQUEST_TIMEOUT_MS: 15 * 1e3,
+    // 普通 API 请求超时（挂起会卡死翻页/轮询状态位）
+    UPLOAD_TIMEOUT_MS: 30 * 1e3,
+    // 图片上传分片请求超时（二进制分片放宽）
+    // 其余 API 端点集中登记（与顶部 FEED_SQUARE_API/MOMENT_API 同类，api.js 不再散落字面量）
+    COMMENT_API_BASE: "https://www.acfun.cn/rest/pc-direct/comment",
+    // /list /add /like /unlike
+    EMOTION_API: "https://www.acfun.cn/rest/pc-direct/emotion/getUserEmotion",
+    BANANA_API: "https://www.acfun.cn/rest/pc-direct/banana/throwBanana",
+    UPLOAD_TOKEN_API: "https://www.acfun.cn/rest/pc-direct/image/upload/getToken",
+    UPLOAD_FINISH_API: "https://www.acfun.cn/rest/pc-direct/image/upload/getUrlAfterUpload",
+    UPLOAD_GATEWAY: "https://upload.kuaishouzt.com",
+    // /api/upload/fragment /complete
+    TOKEN_API: "https://id.app.acfun.cn/rest/web/token/get",
+    INTERACT_API: "https://kuaishouzt.com/rest/zt/interact"
+    // /add /delete
   };
   var AUTO_ENTER_KEY = "moment_plaza_auto_enter";
   var SEL_MAIN_FEEDS = ".ac-member-main .ac-member-feeds";
@@ -947,12 +963,12 @@
     // 正在拉取最新动态
     _upPollTimer: null,
     // 向上定时器
-    _upBackoffMs: 0,
-    // 向上轮询当前退避间隔（空手而归翻倍，命中即复位）
     _upNextAt: 0,
-    // 早于该时间戳不发起向上轮询
+    // 早于该时间戳不发起向上轮询（空手而归按离线时长推算退避）
     _upGeneration: 0,
     // 向上拉取代数，refresh 时递增使旧响应失效
+    _downGeneration: 0,
+    // 向下翻页代数，refresh 时递增使在途旧批次（旧游标）作废
     emoticonMap: null,
     // 表情码→图片 { emotionId: { url, big, name, pkg } }
     emoticonPacks: null
@@ -1053,9 +1069,7 @@
     },
     escapeHtml(text) {
       if (!text) return "";
-      const div = document.createElement("div");
-      div.textContent = text;
-      return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+      return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
     },
     // 统一属性值转义（HTML 标签内用）
     attrEscape(value) {
@@ -1096,9 +1110,10 @@
   var acTagLink = (typePath, id, text) => `<a class="plaza-ac-link${typePath === "v" ? " plaza-ac-video" : ""}" href="//www.acfun.cn/${typePath}/ac${id}" target="_blank">${text}</a>`;
   var INLINE_RULES = [
     {
-      // @提及
+      // @提及。toHtml 不再转义 name：parseContent 已对全文 escapeHtml 过，
+      // 再转一次会把 & 变成 &amp;quot; 这类双重转义（toText 吃原始文本，不受影响）
       pattern: /\[at uid=(\d+)\]@?(.*?)\[\/at\]/g,
-      toHtml: (_, uid, name) => `<a class="plaza-at-link" href="//www.acfun.cn/u/${uid}" target="_blank">@${utils.escapeHtml(name)}</a>`,
+      toHtml: (_, uid, name) => `<a class="plaza-at-link" href="//www.acfun.cn/u/${uid}" target="_blank">@${name}</a>`,
       toText: (_, uid, name) => `@${name}`
     },
     {
@@ -1147,7 +1162,9 @@
     str
   );
   var parser = {
-    // 把已有 HTML 标签替换成占位符，避免链接规则误伤属性里的关键词
+    // 把已有 HTML 标签替换成占位符，避免链接规则误伤属性里的关键词。
+    // 安全前提：占位符形如 <!--...-->，本函数必须在 escapeHtml 之后调用——用户文本里的
+    // "<" 已转义成 &lt;，伪造不出占位符形态，恢复替换不会错位
     _withProtectedTags(html, callback) {
       const tags = [];
       const placeholder = () => `<!--PLAZA_TAG_${tags.length}-->`;
@@ -1249,6 +1266,7 @@
   // src/api.js
   var _apiToken = null;
   var _tokenExpiry = 0;
+  var _tokenPromise = null;
   var _emoticonPromise = null;
   function _applyEmoticons(flat) {
     const map = {};
@@ -1270,59 +1288,50 @@
     state.emoticonPacks = packs;
   }
   var api = {
-    // 根据am号获取单条动态
-    fetchMoment(amId) {
-      if (!amId || amId <= 0) return Promise.resolve(null);
+    // 统一请求封装：带超时（挂起的请求会把 _downLoading/_upRunning 永久卡死），
+    // 网络/超时/JSON 解析失败（含 HTML 错误页）一律 resolve(null)，调用方无需感知网络层差异
+    _gmJson(options, timeoutMs = CONFIG.REQUEST_TIMEOUT_MS) {
       return new Promise((resolve) => {
         GM_xmlhttpRequest({
-          method: "GET",
-          url: `${CONFIG.MOMENT_API}?momentId=${amId}`,
-          headers: {
-            "Accept": "application/json",
-            "Referer": `https://www.acfun.cn/moment/am${amId}`
-          },
-          onload: (response) => {
-            const text = response.responseText.trim();
-            if (!text.startsWith("{") && !text.startsWith("[")) {
-              resolve(null);
-              return;
-            }
+          timeout: timeoutMs,
+          ...options,
+          onload: (resp) => {
             try {
-              const data = JSON.parse(text);
-              if (data.result === 0) {
-                if (data.repostSource && data.moment) {
-                  data.moment.repostSource = data.repostSource;
-                }
-                resolve(data);
-              } else {
-                resolve(null);
-              }
-            } catch (e) {
-              resolve(null);
-            }
-          },
-          onerror: () => resolve(null)
-        });
-      });
-    },
-    // 获取评论列表
-    fetchComments(amId, count = CONFIG.COMMENT_PAGE_SIZE, cursor = "") {
-      return new Promise((resolve) => {
-        GM_xmlhttpRequest({
-          method: "GET",
-          url: `https://www.acfun.cn/rest/pc-direct/comment/list?sourceId=${amId}&sourceType=4&cursor=${cursor}&count=${count}`,
-          headers: { "Accept": "application/json", "Referer": `https://www.acfun.cn/moment/am${amId}` },
-          onload: (response) => {
-            try {
-              const data = JSON.parse(response.responseText);
-              resolve(data.result === 0 ? data : null);
+              resolve(JSON.parse(resp.responseText));
             } catch {
               resolve(null);
             }
           },
-          onerror: () => resolve(null)
+          onerror: () => resolve(null),
+          ontimeout: () => resolve(null)
         });
       });
+    },
+    // 根据am号获取单条动态
+    fetchMoment(amId) {
+      if (!amId || amId <= 0) return Promise.resolve(null);
+      return this._gmJson({
+        method: "GET",
+        url: `${CONFIG.MOMENT_API}?momentId=${amId}`,
+        headers: {
+          "Accept": "application/json",
+          "Referer": `https://www.acfun.cn/moment/am${amId}`
+        }
+      }).then((data) => {
+        if (!data || data.result !== 0) return null;
+        if (data.repostSource && data.moment) {
+          data.moment.repostSource = data.repostSource;
+        }
+        return data;
+      });
+    },
+    // 获取评论列表
+    fetchComments(amId, count = CONFIG.COMMENT_PAGE_SIZE, cursor = "") {
+      return this._gmJson({
+        method: "GET",
+        url: `${CONFIG.COMMENT_API_BASE}/list?sourceId=${amId}&sourceType=4&cursor=${cursor}&count=${count}`,
+        headers: { "Accept": "application/json", "Referer": `https://www.acfun.cn/moment/am${amId}` }
+      }).then((data) => data && data.result === 0 ? data : null);
     },
     // 表情包映射：优先读原生页写入的 localStorage 缓存，其次拉接口（需登录）
     fetchEmoticonPacks() {
@@ -1337,36 +1346,35 @@
           }
         } catch (e) {
         }
-        GM_xmlhttpRequest({
+        this._gmJson({
           method: "POST",
-          url: "https://www.acfun.cn/rest/pc-direct/emotion/getUserEmotion",
-          headers: { "Accept": "application/json" },
-          onload: (resp) => {
-            try {
-              const data = JSON.parse(resp.responseText);
-              const packs = data.emotionPackageList || data.data || [];
-              const flat = [];
-              for (const p of packs) {
-                for (const it of p.emotions || []) {
-                  const url = it.emotionImageSmallUrl || it.smallImageInfo && it.smallImageInfo.thumbnailImageCdnUrl || it.smallImageInfo && it.smallImageInfo.thumbnailImage && it.smallImageInfo.thumbnailImage.cdnUrls && it.smallImageInfo.thumbnailImage.cdnUrls[0] && it.smallImageInfo.thumbnailImage.cdnUrls[0].url || "";
-                  const rawBig = typeof it.emotionImageBigUrl === "string" && it.emotionImageBigUrl || it.bigImageInfo && it.bigImageInfo.thumbnailImageCdnUrl || it.bigImageInfo && it.bigImageInfo.thumbnailImage && it.bigImageInfo.thumbnailImage.cdnUrls && it.bigImageInfo.thumbnailImage.cdnUrls[0] && it.bigImageInfo.thumbnailImage.cdnUrls[0].url || "";
-                  flat.push({
-                    emotionId: it.id,
-                    emotionPkgName: p.name,
-                    emotionImageUrl: url,
-                    emotionBigUrl: rawBig || url,
-                    emotionName: typeof it.name === "string" && it.name || ""
-                  });
-                }
+          url: CONFIG.EMOTION_API,
+          headers: { "Accept": "application/json" }
+        }).then((data) => {
+          if (!data) {
+            _emoticonPromise = null;
+            resolve(false);
+            return;
+          }
+          try {
+            const packs = data.emotionPackageList || data.data || [];
+            const flat = [];
+            for (const p of packs) {
+              for (const it of p.emotions || []) {
+                const url = it.emotionImageSmallUrl || it.smallImageInfo && it.smallImageInfo.thumbnailImageCdnUrl || it.smallImageInfo && it.smallImageInfo.thumbnailImage && it.smallImageInfo.thumbnailImage.cdnUrls && it.smallImageInfo.thumbnailImage.cdnUrls[0] && it.smallImageInfo.thumbnailImage.cdnUrls[0].url || "";
+                const rawBig = typeof it.emotionImageBigUrl === "string" && it.emotionImageBigUrl || it.bigImageInfo && it.bigImageInfo.thumbnailImageCdnUrl || it.bigImageInfo && it.bigImageInfo.thumbnailImage && it.bigImageInfo.thumbnailImage.cdnUrls && it.bigImageInfo.thumbnailImage.cdnUrls[0] && it.bigImageInfo.thumbnailImage.cdnUrls[0].url || "";
+                flat.push({
+                  emotionId: it.id,
+                  emotionPkgName: p.name,
+                  emotionImageUrl: url,
+                  emotionBigUrl: rawBig || url,
+                  emotionName: typeof it.name === "string" && it.name || ""
+                });
               }
-              _applyEmoticons(flat);
-              resolve(true);
-            } catch (e) {
-              _emoticonPromise = null;
-              resolve(false);
             }
-          },
-          onerror: () => {
+            _applyEmoticons(flat);
+            resolve(true);
+          } catch (e) {
             _emoticonPromise = null;
             resolve(false);
           }
@@ -1374,61 +1382,49 @@
       });
       return _emoticonPromise;
     },
-    // 获取API token（点赞用）
+    // 获取API token（点赞/发评论用），并发调用共享同一次请求
     async getApiToken() {
       if (_apiToken && Date.now() < _tokenExpiry) return _apiToken;
-      return new Promise((resolve) => {
-        GM_xmlhttpRequest({
-          method: "POST",
-          url: "https://id.app.acfun.cn/rest/web/token/get",
-          headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
-          data: "sid=acfun.midground.api",
-          onload: (resp) => {
-            try {
-              const data = JSON.parse(resp.responseText);
-              if (data.result === 0) {
-                _apiToken = data["acfun.midground.api_st"] || "";
-                _tokenExpiry = Date.now() + CONFIG.TOKEN_TTL_MS;
-              }
-            } catch {
-            }
-            resolve(_apiToken);
-          },
-          onerror: () => resolve("")
-        });
+      if (_tokenPromise) return _tokenPromise;
+      _tokenPromise = this._gmJson({
+        method: "POST",
+        url: CONFIG.TOKEN_API,
+        headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
+        data: "sid=acfun.midground.api"
+      }).then((data) => {
+        if (data && data.result === 0) {
+          _apiToken = data["acfun.midground.api_st"] || "";
+          _tokenExpiry = Date.now() + CONFIG.TOKEN_TTL_MS;
+        }
+        return _apiToken;
+      }).finally(() => {
+        _tokenPromise = null;
       });
+      return _tokenPromise;
     },
     // 点赞/取消点赞动态
     async likeMoment(momentId, userId, isCancel = false) {
       const token = await this.getApiToken();
       if (!token) return null;
       const endpoint = isCancel ? "delete" : "add";
-      return new Promise((resolve) => {
-        GM_xmlhttpRequest({
-          method: "POST",
-          url: `https://kuaishouzt.com/rest/zt/interact/${endpoint}`,
-          headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
-          data: `objectId=${momentId}&objectType=10&userId=${userId}&acfun.midground.api_st=${encodeURIComponent(token)}&kpn=ACFUN_APP&kpf=PC_WEB&subBiz=mainApp&interactType=1`,
-          onload: (resp) => {
-            try {
-              resolve(JSON.parse(resp.responseText));
-            } catch {
-              resolve(null);
-            }
-          },
-          onerror: () => resolve(null)
-        });
+      const data = await this._gmJson({
+        method: "POST",
+        url: `${CONFIG.INTERACT_API}/${endpoint}`,
+        headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
+        data: `objectId=${momentId}&objectType=10&userId=${userId}&acfun.midground.api_st=${encodeURIComponent(token)}&kpn=ACFUN_APP&kpf=PC_WEB&subBiz=mainApp&interactType=1`
       });
+      return data && data.result === 0 ? data : null;
     },
-    // 评论点赞/取消点赞
+    // 评论点赞/取消点赞（同源请求，直接 fetch 带 cookie；超时用 AbortSignal）
     async likeComment(sourceId, commentId, isCancel = false) {
       const endpoint = isCancel ? "unlike" : "like";
       try {
-        const resp = await fetch(`https://www.acfun.cn/rest/pc-direct/comment/${endpoint}`, {
+        const resp = await fetch(`${CONFIG.COMMENT_API_BASE}/${endpoint}`, {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: `sourceId=${sourceId}&sourceType=4&commentId=${commentId}`,
-          credentials: "include"
+          credentials: "include",
+          signal: AbortSignal.timeout(CONFIG.REQUEST_TIMEOUT_MS)
         });
         return await resp.json();
       } catch {
@@ -1440,11 +1436,12 @@
       const midgroundToken = await this.getApiToken();
       const body = `sourceId=${amId}&sourceType=4&content=${encodeURIComponent(content)}` + (replyToCommentId ? `&replyToCommentId=${replyToCommentId}` : "") + (midgroundToken ? `&midgroundToken=${encodeURIComponent(midgroundToken)}` : "");
       try {
-        const resp = await fetch("https://www.acfun.cn/rest/pc-direct/comment/add", {
+        const resp = await fetch(`${CONFIG.COMMENT_API_BASE}/add`, {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body,
-          credentials: "include"
+          credentials: "include",
+          signal: AbortSignal.timeout(CONFIG.REQUEST_TIMEOUT_MS)
         });
         return await resp.json();
       } catch (e) {
@@ -1455,136 +1452,74 @@
     // 上传评论图片（kuaishouzt 网关四步：getToken → 分片上传 → complete → 换取 URL）
     // 返回可长期访问的裸路径 URL（preview 域名的 ksc2 路径即文件标识，签名参数会过期需剥掉）
     async uploadImage(file) {
-      const token = await new Promise((resolve) => {
-        GM_xmlhttpRequest({
-          method: "POST",
-          url: "https://www.acfun.cn/rest/pc-direct/image/upload/getToken",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          data: `fileName=${encodeURIComponent(file.name || "image.png")}`,
-          onload: (resp) => {
-            try {
-              const data = JSON.parse(resp.responseText);
-              resolve(data.result === 0 ? data.info?.token || null : null);
-            } catch {
-              resolve(null);
-            }
-          },
-          onerror: () => resolve(null)
-        });
+      const data = await this._gmJson({
+        method: "POST",
+        url: CONFIG.UPLOAD_TOKEN_API,
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        data: `fileName=${encodeURIComponent(file.name || "image.png")}`
       });
+      const token = data && data.result === 0 && data.info ? data.info.token : null;
       if (!token) return null;
-      const endpoint = "https://upload.kuaishouzt.com";
+      const gateway = CONFIG.UPLOAD_GATEWAY;
       const total = file.size;
       const chunks = Math.max(1, Math.ceil(total / CONFIG.UPLOAD_CHUNK_SIZE));
       for (let i = 0; i < chunks; i++) {
         const start = i * CONFIG.UPLOAD_CHUNK_SIZE;
         const end = Math.min(start + CONFIG.UPLOAD_CHUNK_SIZE, total);
-        const ok = await new Promise((resolve) => {
-          GM_xmlhttpRequest({
-            method: "POST",
-            url: `${endpoint}/api/upload/fragment?upload_token=${encodeURIComponent(token)}&fragment_id=${i}`,
-            headers: {
-              "Content-Type": "application/octet-stream",
-              "Content-Range": `bytes ${start}-${end - 1}/${total}`
-            },
-            data: file.slice(start, end),
-            onload: (resp) => {
-              try {
-                resolve(JSON.parse(resp.responseText).result === 1);
-              } catch {
-                resolve(false);
-              }
-            },
-            onerror: () => resolve(false)
-          });
-        });
-        if (!ok) {
+        const resp = await this._gmJson({
+          method: "POST",
+          url: `${gateway}/api/upload/fragment?upload_token=${encodeURIComponent(token)}&fragment_id=${i}`,
+          headers: {
+            "Content-Type": "application/octet-stream",
+            "Content-Range": `bytes ${start}-${end - 1}/${total}`
+          },
+          data: file.slice(start, end)
+        }, CONFIG.UPLOAD_TIMEOUT_MS);
+        if (!resp || resp.result !== 1) {
           utils.log("图片分片上传失败: 分片", i);
           return null;
         }
       }
-      const completed = await new Promise((resolve) => {
-        GM_xmlhttpRequest({
-          method: "POST",
-          url: `${endpoint}/api/upload/complete?upload_token=${encodeURIComponent(token)}&fragment_count=${chunks}`,
-          onload: (resp) => {
-            try {
-              resolve(JSON.parse(resp.responseText).result === 1);
-            } catch {
-              resolve(false);
-            }
-          },
-          onerror: () => resolve(false)
-        });
-      });
-      if (!completed) {
+      const done = await this._gmJson({
+        method: "POST",
+        url: `${gateway}/api/upload/complete?upload_token=${encodeURIComponent(token)}&fragment_count=${chunks}`
+      }, CONFIG.UPLOAD_TIMEOUT_MS);
+      if (!done || done.result !== 1) {
         utils.log("图片上传 complete 失败");
         return null;
       }
-      return new Promise((resolve) => {
-        GM_xmlhttpRequest({
-          method: "POST",
-          url: "https://www.acfun.cn/rest/pc-direct/image/upload/getUrlAfterUpload",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          data: `token=${encodeURIComponent(token)}&bizFlag=web-comment-text`,
-          onload: (resp) => {
-            try {
-              const data = JSON.parse(resp.responseText);
-              resolve(data.result === 0 && data.url ? data.url.split("?")[0] : null);
-            } catch {
-              resolve(null);
-            }
-          },
-          onerror: () => resolve(null)
-        });
+      const final = await this._gmJson({
+        method: "POST",
+        url: CONFIG.UPLOAD_FINISH_API,
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        data: `token=${encodeURIComponent(token)}&bizFlag=web-comment-text`
       });
+      return final && final.result === 0 && final.url ? final.url.split("?")[0] : null;
     },
-    // 投蕉给动态作者
+    // 投蕉给动态作者（保留完整响应体：调用方需读 error_msg 提示禁止投蕉等）
     throwBanana(momentId) {
-      return new Promise((resolve) => {
-        GM_xmlhttpRequest({
-          method: "POST",
-          url: "https://www.acfun.cn/rest/pc-direct/banana/throwBanana",
-          headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": `https://www.acfun.cn/moment/am${momentId}` },
-          data: `resourceId=${momentId}&count=1&resourceType=10`,
-          onload: (resp) => {
-            try {
-              resolve(JSON.parse(resp.responseText));
-            } catch {
-              resolve(null);
-            }
-          },
-          onerror: () => resolve(null)
-        });
+      return this._gmJson({
+        method: "POST",
+        url: CONFIG.BANANA_API,
+        headers: { "Content-Type": "application/x-www-form-urlencoded", "Referer": `https://www.acfun.cn/moment/am${momentId}` },
+        data: `resourceId=${momentId}&count=1&resourceType=10`
       });
     },
     // 拉取动态广场列表（APP 端接口，免登录，服务端已过滤粉丝可见，每页固定 20 条，不含转发）
     // cursor 为空拉最新一页，否则按 pcursor 续翻更旧的一页；翻到底时 pcursor 返回 "no_more"
     // 返回 { records: [{ amId, absTs, data, fetchedAt }], nextCursor, noMore }，请求失败返回 null
     fetchFeedSquare(cursor = "") {
-      return new Promise((resolve) => {
-        const qs = cursor ? `?pcursor=${encodeURIComponent(cursor)}` : "";
-        GM_xmlhttpRequest({
-          method: "GET",
-          url: `${CONFIG.FEED_SQUARE_API}${qs}`,
-          headers: { "Accept": "application/json" },
-          onload: (response) => {
-            try {
-              const data = JSON.parse(response.responseText);
-              if (data.result !== 0 || !Array.isArray(data.feedList)) {
-                resolve(null);
-                return;
-              }
-              const now = Date.now();
-              const records = data.feedList.filter((f) => f.moment && f.moment.momentId && f.createTime).map((f) => this._squareFeedToRecord(f, now));
-              const nextCursor = String(data.pcursor || "");
-              resolve({ records, nextCursor, noMore: nextCursor === "no_more" });
-            } catch (e) {
-              resolve(null);
-            }
-          },
-          onerror: () => resolve(null)
-        });
+      const qs = cursor ? `?pcursor=${encodeURIComponent(cursor)}` : "";
+      return this._gmJson({
+        method: "GET",
+        url: `${CONFIG.FEED_SQUARE_API}${qs}`,
+        headers: { "Accept": "application/json" }
+      }).then((data) => {
+        if (!data || data.result !== 0 || !Array.isArray(data.feedList)) return null;
+        const now = Date.now();
+        const records = data.feedList.filter((f) => f.moment && f.moment.momentId && f.createTime).map((f) => this._squareFeedToRecord(f, now));
+        const nextCursor = String(data.pcursor || "");
+        return { records, nextCursor, noMore: nextCursor === "no_more" };
       });
     },
     // feedSquare 条目 → 本地记录格式：
@@ -1784,7 +1719,10 @@
         if (rs.resourceType === 10) href = `//www.acfun.cn/moment/am${rs.resourceId}`;
         else href = `//www.acfun.cn/${rs.resourceType === 2 ? "v" : "a"}/ac${rs.resourceId}`;
       }
-      if (!href && rs.shareUrl) href = String(rs.shareUrl).replace(/^https?:/, "");
+      if (!href && rs.shareUrl) {
+        const shareUrl = String(rs.shareUrl);
+        if (/^https?:/i.test(shareUrl)) href = shareUrl.replace(/^https?:/i, "");
+      }
       return {
         title,
         isMomentRepost,
@@ -1815,7 +1753,9 @@
       const user = moment.user || {};
       const userId = user.id || user.userId || "";
       const userName = user.name || "";
-      const userAvatar = utils.attrEscape((user.headCdnUrls?.[0]?.url || user.headUrl || "") + "?imageMogr2/auto-orient/format/webp/quality/80!/ignore-error/1");
+      const rawAvatar = user.headCdnUrls?.[0]?.url || user.headUrl || "";
+      const avatarQuery = "imageMogr2/auto-orient/format/webp/quality/80!/ignore-error/1";
+      const userAvatar = utils.attrEscape((rawAvatar.includes("?") ? `${rawAvatar}&` : `${rawAvatar}?`) + avatarQuery);
       const repost = this._getRepostInfo(moment);
       const repostHtml = repost ? this._repostCardHtml(repost) : "";
       const rawText = moment.text || moment.replaceUbbText || "";
@@ -1955,17 +1895,20 @@
             <div class="plaza-comment-more"><a href="//www.acfun.cn/moment/am${amId}" target="_blank">查看更多评论</a></div>
         `;
     },
+    // 排序 + 新鲜度计算收拢一处：整列表渲染与触底增量追加共用，保证两端 HTML 一致
+    renderCardsHtml(records) {
+      const now = Date.now();
+      const sorted = [...records].sort((a, b) => (b.amId || 0) - (a.amId || 0));
+      return sorted.map((r) => {
+        const pending = !!r.absTs && now - r.absTs <= CONFIG.FRESH_WINDOW_MS;
+        return this.renderCard(r, { pending });
+      }).join("");
+    },
     renderList(records) {
       if (records.length === 0) {
         return '<div class="moment-plaza-empty">正在加载动态...</div>';
       }
-      const now = Date.now();
-      const sorted = [...records].sort((a, b) => (b.amId || 0) - (a.amId || 0));
-      return `<div class="moment-plaza-list">${sorted.map((r) => {
-        const absTs = r.absTs;
-        const pending = !!absTs && now - absTs <= CONFIG.FRESH_WINDOW_MS;
-        return this.renderCard(r, { pending });
-      }).join("")}</div>`;
+      return `<div class="moment-plaza-list">${this.renderCardsHtml(records)}</div>`;
     }
   };
 
@@ -1975,9 +1918,7 @@
     start() {
       const lastDiscovery = storage.getLastDiscoveryAt();
       if (lastDiscovery) {
-        const idleMs = Date.now() - lastDiscovery;
-        state._upBackoffMs = this._computeBackoff(idleMs);
-        state._upNextAt = Date.now() + state._upBackoffMs;
+        state._upNextAt = Date.now() + this._computeBackoff(Date.now() - lastDiscovery);
       }
       this._startUpwardPoll();
       this.cleanupExpired();
@@ -2022,8 +1963,7 @@
       const backoffAndSettle = () => {
         const lastDisc = storage.getLastDiscoveryAt();
         const idleMs = lastDisc ? Date.now() - lastDisc : 0;
-        state._upBackoffMs = this._computeBackoff(idleMs);
-        state._upNextAt = Date.now() + state._upBackoffMs;
+        state._upNextAt = Date.now() + this._computeBackoff(idleMs);
       };
       try {
         const page = await api.fetchFeedSquare();
@@ -2046,7 +1986,6 @@
         if (freshCount) {
           state.latestAmId = maxAmId;
           storage.setLastDiscoveryAt(Date.now());
-          state._upBackoffMs = 0;
           state._upNextAt = 0;
           updateUp(`↑发现 ${freshCount} 条新动态，点击刷新`);
         } else {
@@ -2094,6 +2033,7 @@
     async refreshPlaza() {
       background._stopUpwardPoll();
       background._cancelRunningSearch();
+      state._downGeneration++;
       const statusEl = document.getElementById("fetch-status");
       const updateStatus = (t) => {
         if (statusEl) statusEl.textContent = t;
@@ -2113,6 +2053,8 @@
       renderer.getInteractiveHtml();
       state.moments = [];
       state._downCursor = "";
+      state._noMoreDown = false;
+      state._downGeneration++;
       mainContent.innerHTML = `
             <div class="moment-plaza-container">
                 ${renderer.renderToolbar()}
@@ -2251,6 +2193,7 @@
       if (state._downLoading || state._noMoreDown) return;
       if (!document.getElementById("moment-list")) return;
       state._downLoading = true;
+      const gen = state._downGeneration;
       const loadMoreEl = document.getElementById("load-more-status");
       if (loadMoreEl) {
         loadMoreEl.className = "plaza-load-more loading";
@@ -2258,6 +2201,7 @@
       }
       try {
         const page = await api.fetchFeedSquare(state._downCursor);
+        if (gen !== state._downGeneration) return;
         if (!page) {
           if (loadMoreEl) {
             loadMoreEl.className = "plaza-load-more";
@@ -2284,7 +2228,8 @@
           }
         } else {
           state.moments.push(...inWindow);
-          this._renderList();
+          const listEl = document.querySelector(".moment-plaza-list");
+          if (listEl) listEl.insertAdjacentHTML("beforeend", renderer.renderCardsHtml(inWindow));
           await db.putMoments(inWindow).catch(() => {
           });
           await this._refreshRecords(inWindow);
@@ -2294,7 +2239,9 @@
           }
         }
       } finally {
-        state._downLoading = false;
+        if (gen === state._downGeneration) {
+          state._downLoading = false;
+        }
       }
     }
   };
@@ -2473,10 +2420,11 @@
     const strip = panel.querySelector(".plaza-emot-strip");
     if (!strip) return;
     const activeName = (activePack(panel) || {}).name;
+    const prevLeft = strip.scrollLeft;
     strip.innerHTML = viewPacks().map(
       (p) => `<button type="button" class="plaza-emot-pack-thumb${p.name === activeName ? " active" : ""}" data-name="${utils.escapeHtml(p.name)}" title="${utils.escapeHtml(p.name)}"><img src="${attrUrl(p.items[0] && p.items[0].url)}" alt="" loading="lazy"></button>`
     ).join("");
-    strip.scrollLeft = 0;
+    strip.scrollLeft = prevLeft;
     updateStripArrows(panel);
   }
   function renderAll(panel) {
@@ -2725,17 +2673,23 @@
           const card = commentLikeBtn.closest(".moment-plaza-item");
           const amId = card?.dataset.amId;
           const commentItem = commentLikeBtn.closest(".area-comment-top");
-          const commentId = commentItem?.querySelector(".plaza-reply-btn")?.dataset.commentId;
+          const commentId = commentItem?.dataset.commentid;
           if (!amId || !commentId) return;
+          if (commentLikeBtn.dataset.loading) return;
+          commentLikeBtn.dataset.loading = "1";
           const isLiked = commentLikeBtn.classList.contains("area-comment-up");
-          const result = await api.likeComment(amId, commentId, isLiked);
-          if (result && result.result === 0) {
-            commentLikeBtn.classList.toggle("area-comment-up");
-            const text = commentLikeBtn.textContent.trim();
-            const match = text.match(/\d+/);
-            const currentCount = match ? parseInt(match[0]) : 0;
-            const newCount = isLiked ? Math.max(0, currentCount - 1) : currentCount + 1;
-            commentLikeBtn.textContent = newCount > 0 ? `赞 ${newCount}` : "赞";
+          try {
+            const result = await api.likeComment(amId, commentId, isLiked);
+            if (result && result.result === 0) {
+              commentLikeBtn.classList.toggle("area-comment-up");
+              const text = commentLikeBtn.textContent.trim();
+              const match = text.match(/\d+/);
+              const currentCount = match ? parseInt(match[0]) : 0;
+              const newCount = isLiked ? Math.max(0, currentCount - 1) : currentCount + 1;
+              commentLikeBtn.textContent = newCount > 0 ? `赞 ${newCount}` : "赞";
+            }
+          } finally {
+            delete commentLikeBtn.dataset.loading;
           }
           return;
         }
@@ -2845,7 +2799,7 @@
         if (item && !(e.relatedTarget && item.contains(e.relatedTarget))) emotpanel.hidePreview();
       });
       document.addEventListener("scroll", () => emotpanel.hidePreview(), true);
-      document.addEventListener("keydown", async (e) => {
+      document.addEventListener("keydown", (e) => {
         if (e.key !== "Enter") return;
         const editor2 = e.target.closest?.(".plaza-editor-input");
         if (editor2) {

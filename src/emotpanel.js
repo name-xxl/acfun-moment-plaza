@@ -90,11 +90,13 @@ function renderStrip(panel) {
     if (!strip) return;
     // viewPacks() 每次返回新对象，高亮按包名比较而非引用
     const activeName = (activePack(panel) || {}).name;
+    // 重建后恢复横向滚动位置：选表情触发 refreshRecent 重建切换条时不能跳回开头
+    const prevLeft = strip.scrollLeft;
     strip.innerHTML = viewPacks().map((p) =>
         `<button type="button" class="plaza-emot-pack-thumb${p.name === activeName ? ' active' : ''}" data-name="${utils.escapeHtml(p.name)}" title="${utils.escapeHtml(p.name)}">` +
         `<img src="${attrUrl(p.items[0] && p.items[0].url)}" alt="" loading="lazy"></button>`
     ).join('');
-    strip.scrollLeft = 0;
+    strip.scrollLeft = prevLeft;
     updateStripArrows(panel);
 }
 

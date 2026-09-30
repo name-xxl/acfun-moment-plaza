@@ -35,6 +35,7 @@ export const controller = {
     async refreshPlaza() {
         background._stopUpwardPoll();
         background._cancelRunningSearch();
+        state._downGeneration++; // 在途的触底批带着旧游标，一律作废
 
         const statusEl = document.getElementById('fetch-status');
         const updateStatus = (t) => { if (statusEl) statusEl.textContent = t; };
@@ -59,6 +60,8 @@ export const controller = {
 
         state.moments = [];
         state._downCursor = '';
+        state._noMoreDown = false;
+        state._downGeneration++; // 重建视图，在途旧批次不得写入新列表
         mainContent.innerHTML = `
             <div class="moment-plaza-container">
                 ${renderer.renderToolbar()}
@@ -224,6 +227,7 @@ export const controller = {
         if (!document.getElementById('moment-list')) return;
 
         state._downLoading = true;
+        const gen = state._downGeneration;
         const loadMoreEl = document.getElementById('load-more-status');
         if (loadMoreEl) {
             loadMoreEl.className = 'plaza-load-more loading';
@@ -232,6 +236,9 @@ export const controller = {
 
         try {
             const page = await api.fetchFeedSquare(state._downCursor);
+            // 拉取期间被刷新/重建打断 → 旧游标的结果全部作废，不写状态不动 DOM
+            if (gen !== state._downGeneration) return;
+
             if (!page) {
                 // 不置 noMoreDown，下次触底自动重试
                 if (loadMoreEl) {
@@ -262,7 +269,10 @@ export const controller = {
                 }
             } else {
                 state.moments.push(...inWindow);
-                this._renderList();
+                // 只把新卡追加到列表尾部（feedSquare 按时间降序，新批必落在最旧端），
+                // 不整列表重建——否则用户正在输入的评论草稿、展开的评论区/表情面板都会被清掉
+                const listEl = document.querySelector('.moment-plaza-list');
+                if (listEl) listEl.insertAdjacentHTML('beforeend', renderer.renderCardsHtml(inWindow));
                 await db.putMoments(inWindow).catch(() => {});
                 await this._refreshRecords(inWindow);
 
@@ -272,7 +282,10 @@ export const controller = {
                 }
             }
         } finally {
-            state._downLoading = false;
+            // 代数已变说明新会话接管了 _downLoading，不能替它清标志
+            if (gen === state._downGeneration) {
+                state._downLoading = false;
+            }
         }
     }
 };

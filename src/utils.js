@@ -7,9 +7,13 @@ export const utils = {
 
     escapeHtml(text) {
         if (!text) return '';
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        // & 必须最先替换；输出与「textContent 赋值 + 引号补转义」的 DOM 法等价，但不依赖 document（node 测试可用）
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     },
 
     // 统一属性值转义（HTML 标签内用）

@@ -206,19 +206,27 @@ export const events = {
             if (commentLikeBtn && commentLikeBtn.closest('.moment-comments')) {
                 const card = commentLikeBtn.closest('.moment-plaza-item');
                 const amId = card?.dataset.amId;
+                // commentid 就在本项 DOM 上（data-commentid），不依赖回复按钮存在
                 const commentItem = commentLikeBtn.closest('.area-comment-top');
-                const commentId = commentItem?.querySelector('.plaza-reply-btn')?.dataset.commentId;
+                const commentId = commentItem?.dataset.commentid;
                 if (!amId || !commentId) return;
 
+                // 防抖：连点会发出一串方向相反的 toggle 请求（同动态点赞的 loading 守卫）
+                if (commentLikeBtn.dataset.loading) return;
+                commentLikeBtn.dataset.loading = '1';
                 const isLiked = commentLikeBtn.classList.contains('area-comment-up');
-                const result = await api.likeComment(amId, commentId, isLiked);
-                if (result && result.result === 0) {
-                    commentLikeBtn.classList.toggle('area-comment-up');
-                    const text = commentLikeBtn.textContent.trim();
-                    const match = text.match(/\d+/);
-                    const currentCount = match ? parseInt(match[0]) : 0;
-                    const newCount = isLiked ? Math.max(0, currentCount - 1) : currentCount + 1;
-                    commentLikeBtn.textContent = newCount > 0 ? `赞 ${newCount}` : '赞';
+                try {
+                    const result = await api.likeComment(amId, commentId, isLiked);
+                    if (result && result.result === 0) {
+                        commentLikeBtn.classList.toggle('area-comment-up');
+                        const text = commentLikeBtn.textContent.trim();
+                        const match = text.match(/\d+/);
+                        const currentCount = match ? parseInt(match[0]) : 0;
+                        const newCount = isLiked ? Math.max(0, currentCount - 1) : currentCount + 1;
+                        commentLikeBtn.textContent = newCount > 0 ? `赞 ${newCount}` : '赞';
+                    }
+                } finally {
+                    delete commentLikeBtn.dataset.loading;
                 }
                 return;
             }
@@ -349,7 +357,7 @@ export const events = {
         // 预览浮层 fixed 定位，面板/页面滚动时立即隐藏，避免错位
         document.addEventListener('scroll', () => emotpanel.hidePreview(), true);
 
-        document.addEventListener('keydown', async (e) => {
+        document.addEventListener('keydown', (e) => {
             if (e.key !== 'Enter') return;
             const editor = e.target.closest?.('.plaza-editor-input');
             if (editor) {

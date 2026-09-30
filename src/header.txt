@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AcFun 动态广场
 // @namespace    https://www.acfun.cn/
-// @version      3.6.0
-// @description  按am号查找动态，按时间排序显示，IndexedDB 预加载缓存
+// @version      3.7.0
+// @description  在 AcFun 个人中心添加「动态广场」：全站最新动态瀑布流（feedSquare）、评论互动、IndexedDB 留存
 // @author       name_xxl
 // @match        https://www.acfun.cn/member*
 // @downloadURL  https://raw.githubusercontent.com/name-xxl/acfun-moment-plaza/main/list/acfun-moment-plaza.user.js

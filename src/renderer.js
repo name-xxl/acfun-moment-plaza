@@ -163,7 +163,11 @@ export const renderer = {
             if (rs.resourceType === 10) href = `//www.acfun.cn/moment/am${rs.resourceId}`;
             else href = `//www.acfun.cn/${rs.resourceType === 2 ? 'v' : 'a'}/ac${rs.resourceId}`;
         }
-        if (!href && rs.shareUrl) href = String(rs.shareUrl).replace(/^https?:/, '');
+        if (!href && rs.shareUrl) {
+            const shareUrl = String(rs.shareUrl);
+            // 协议白名单：shareUrl 直接进 href，非 http(s)（如 javascript:）一律不采信
+            if (/^https?:/i.test(shareUrl)) href = shareUrl.replace(/^https?:/i, '');
+        }
 
         return {
             title,
@@ -198,7 +202,10 @@ export const renderer = {
 
         const userId = user.id || user.userId || '';
         const userName = user.name || '';
-        const userAvatar = utils.attrEscape((user.headCdnUrls?.[0]?.url || user.headUrl || '') + '?imageMogr2/auto-orient/format/webp/quality/80!/ignore-error/1');
+        const rawAvatar = user.headCdnUrls?.[0]?.url || user.headUrl || '';
+        // 缩参拼接：URL 已带 query 时用 &，避免出现第二个 ? 使参数失效
+        const avatarQuery = 'imageMogr2/auto-orient/format/webp/quality/80!/ignore-error/1';
+        const userAvatar = utils.attrEscape((rawAvatar.includes('?') ? `${rawAvatar}&` : `${rawAvatar}?`) + avatarQuery);
 
         const repost = this._getRepostInfo(moment);
         const repostHtml = repost ? this._repostCardHtml(repost) : '';
@@ -362,17 +369,20 @@ export const renderer = {
         `;
     },
 
+    // 排序 + 新鲜度计算收拢一处：整列表渲染与触底增量追加共用，保证两端 HTML 一致
+    renderCardsHtml(records) {
+        const now = Date.now();
+        const sorted = [...records].sort((a, b) => (b.amId || 0) - (a.amId || 0));
+        return sorted.map(r => {
+            const pending = !!r.absTs && (now - r.absTs) <= CONFIG.FRESH_WINDOW_MS;
+            return this.renderCard(r, { pending });
+        }).join('');
+    },
+
     renderList(records) {
         if (records.length === 0) {
             return '<div class="moment-plaza-empty">正在加载动态...</div>';
         }
-
-        const now = Date.now();
-        const sorted = [...records].sort((a, b) => (b.amId || 0) - (a.amId || 0));
-        return `<div class="moment-plaza-list">${sorted.map(r => {
-            const absTs = r.absTs;
-            const pending = !!absTs && (now - absTs) <= CONFIG.FRESH_WINDOW_MS;
-            return this.renderCard(r, { pending });
-        }).join('')}</div>`;
+        return `<div class="moment-plaza-list">${this.renderCardsHtml(records)}</div>`;
     }
 };

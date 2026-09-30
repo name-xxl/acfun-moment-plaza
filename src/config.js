@@ -23,6 +23,19 @@ export const CONFIG = {
     KEEP_DAYS_OPTIONS: [1, 2, 3, 4, 5, 6, 7], // 保留天数可选项
     UPLOAD_CHUNK_SIZE: 1 * 1024 * 1024, // 评论图片上传分片大小（与原生一致 1M）
     MAX_IMAGE_SIZE: 5 * 1024 * 1024,    // 评论图片大小上限（原生提示 5M）
+
+    REQUEST_TIMEOUT_MS: 15 * 1000,      // 普通 API 请求超时（挂起会卡死翻页/轮询状态位）
+    UPLOAD_TIMEOUT_MS: 30 * 1000,       // 图片上传分片请求超时（二进制分片放宽）
+
+    // 其余 API 端点集中登记（与顶部 FEED_SQUARE_API/MOMENT_API 同类，api.js 不再散落字面量）
+    COMMENT_API_BASE: 'https://www.acfun.cn/rest/pc-direct/comment',        // /list /add /like /unlike
+    EMOTION_API: 'https://www.acfun.cn/rest/pc-direct/emotion/getUserEmotion',
+    BANANA_API: 'https://www.acfun.cn/rest/pc-direct/banana/throwBanana',
+    UPLOAD_TOKEN_API: 'https://www.acfun.cn/rest/pc-direct/image/upload/getToken',
+    UPLOAD_FINISH_API: 'https://www.acfun.cn/rest/pc-direct/image/upload/getUrlAfterUpload',
+    UPLOAD_GATEWAY: 'https://upload.kuaishouzt.com',                        // /api/upload/fragment /complete
+    TOKEN_API: 'https://id.app.acfun.cn/rest/web/token/get',
+    INTERACT_API: 'https://kuaishouzt.com/rest/zt/interact',                // /add /delete
 };
 
 export const AUTO_ENTER_KEY = 'moment_plaza_auto_enter';

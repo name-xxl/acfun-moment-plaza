@@ -10,9 +10,7 @@ export const background = {
     start() {
         const lastDiscovery = storage.getLastDiscoveryAt();
         if (lastDiscovery) {
-            const idleMs = Date.now() - lastDiscovery;
-            state._upBackoffMs = this._computeBackoff(idleMs);
-            state._upNextAt = Date.now() + state._upBackoffMs;
+            state._upNextAt = Date.now() + this._computeBackoff(Date.now() - lastDiscovery);
         }
 
         this._startUpwardPoll();
@@ -66,8 +64,7 @@ export const background = {
         const backoffAndSettle = () => {
             const lastDisc = storage.getLastDiscoveryAt();
             const idleMs = lastDisc ? Date.now() - lastDisc : 0;
-            state._upBackoffMs = this._computeBackoff(idleMs);
-            state._upNextAt = Date.now() + state._upBackoffMs;
+            state._upNextAt = Date.now() + this._computeBackoff(idleMs);
         };
 
         try {
@@ -96,7 +93,6 @@ export const background = {
             if (freshCount) {
                 state.latestAmId = maxAmId;
                 storage.setLastDiscoveryAt(Date.now());
-                state._upBackoffMs = 0;
                 state._upNextAt = 0;
                 updateUp(`↑发现 ${freshCount} 条新动态，点击刷新`);
             } else {
