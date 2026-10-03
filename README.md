@@ -2,6 +2,8 @@
 
 油猴脚本，在 AcFun 个人中心添加「动态广场」功能，用官方 feedSquare 列表接口拉取全站最新动态瀑布流展示，用 IndexedDB 做数据留存。
 
+> **维护收尾（sunset）公告**：本项目的 UBB 解析、评论/互动写链能力已由 [acfun-svfeed](https://github.com/name-xxl/acfun-svfeed) 单源吸收（svfeed `src/ubb.js` 统一管线 + 动态写链五端点实测，见其 `docs/api-research.md` §4.7）。两仓两套管线是注定的漂移源，不允许无限期并行——本项目进入维护收尾：只修致命 bug、不新增功能；新功能与后续演进请安装 acfun-svfeed（全功能单脚本，含关注视图动态卡）。
+
 ## 开发与构建
 
 源码按模块拆分在 `src/` 下（config / state / utils / format / storage / parser / icons / css / db / api / emotpanel / renderer / background / navigation / controller / events / main），用 esbuild 打包成单文件油猴脚本：
